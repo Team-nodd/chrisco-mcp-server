@@ -2,6 +2,8 @@
 
 Enterprise-grade Model Context Protocol (MCP) server for Slack integration with advanced business features.
 
+**✅ Connected to Railway auto-deploy!**
+
 ## Overview
 
 This MCP server provides comprehensive Slack workspace integration through Claude.ai, enabling:
