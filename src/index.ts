@@ -791,22 +791,33 @@ app.get('/', (req, res) => {
   });
 });
 
-// MCP endpoint
-app.use('/mcp', (req, res, next) => {
+// MCP endpoint using SDK transport
+app.post('/mcp', async (req, res) => {
   console.log('MCP request received:', req.method, req.url);
   console.log('Headers:', req.headers);
   
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined
-  });
-  transport.handleRequest(req, res, req.body);
+  try {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // Stateless mode for simplicity
+    });
+    
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    
+    res.on('close', () => {
+      server.close();
+    });
+  } catch (error) {
+    console.error('MCP transport error:', error);
+    res.status(500).json({
+      jsonrpc: '2.0',
+      error: { code: -32603, message: 'Internal error' },
+      id: null
+    });
+  }
 });
 
 async function main() {
-  await server.connect(new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined
-  }));
-  
   app.listen(PORT, () => {
     console.log(`🚀 Slack MCP Server running on port ${PORT}`);
     console.log(`📡 MCP endpoint: http://localhost:${PORT}/mcp`);
