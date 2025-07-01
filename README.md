@@ -76,7 +76,7 @@ This server is configured for Railway deployment with automatic builds and healt
 
 3. **Your MCP endpoint will be**:
    ```
-   https://your-project.up.railway.app/sse
+   https://your-project.up.railway.app/mcp
    ```
 
 ### Alternative Hosting
@@ -115,7 +115,7 @@ In Claude.ai, go to Settings → MCP Servers and add:
 ```json
 {
   "name": "slack-mcp-server", 
-  "endpoint": "https://your-railway-app.up.railway.app/sse",
+  "endpoint": "https://your-railway-app.up.railway.app/mcp",
   "transport": "streamableHttp"
 }
 ```

@@ -782,7 +782,7 @@ app.get('/', (req, res) => {
     description: 'Enterprise-grade MCP server for Slack integration',
     endpoints: {
       health: '/health',
-      sse: '/sse'
+      mcp: '/mcp'
     },
     capabilities: ['tools', 'resources', 'prompts'],
     tools: ['get_slack_channels', 'get_channel_messages', 'get_thread_replies', 'send_slack_message'],
@@ -791,9 +791,9 @@ app.get('/', (req, res) => {
   });
 });
 
-// MCP SSE endpoint
-app.use('/sse', (req, res, next) => {
-  console.log('MCP SSE request received:', req.method, req.url);
+// MCP endpoint
+app.use('/mcp', (req, res, next) => {
+  console.log('MCP request received:', req.method, req.url);
   console.log('Headers:', req.headers);
   
   const transport = new StreamableHTTPServerTransport({
@@ -809,7 +809,7 @@ async function main() {
   
   app.listen(PORT, () => {
     console.log(`🚀 Slack MCP Server running on port ${PORT}`);
-    console.log(`📡 MCP endpoint: http://localhost:${PORT}/sse`);
+    console.log(`📡 MCP endpoint: http://localhost:${PORT}/mcp`);
     console.log(`❤️ Health check: http://localhost:${PORT}/health`);
     console.log(`🏠 Homepage: http://localhost:${PORT}/`);
   });
