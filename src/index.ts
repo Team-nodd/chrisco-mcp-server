@@ -60,10 +60,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             token: {
               type: 'string',
-              description: 'Slack Bot Token (xoxb-...)'
+              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
             }
           },
-          required: ['token']
+          required: []
         }
       },
       {
@@ -74,14 +74,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             token: {
               type: 'string',
-              description: 'Slack Bot Token (xoxb-...)'
+              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
             },
             channel: {
               type: 'string',
-              description: 'Channel ID (e.g., C1234567890)'
+              description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
             }
           },
-          required: ['token', 'channel']
+          required: []
         }
       },
       {
@@ -92,11 +92,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             token: {
               type: 'string',
-              description: 'Slack Bot Token (xoxb-...)'
+              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
             },
             channel: {
               type: 'string',
-              description: 'Channel ID (e.g., C1234567890)'
+              description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
             },
             thread_ts: {
               type: 'string',
@@ -108,7 +108,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               default: 50
             }
           },
-          required: ['token', 'channel', 'thread_ts']
+          required: ['thread_ts']
         }
       },
       {
@@ -119,11 +119,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             token: {
               type: 'string',
-              description: 'Slack Bot Token (xoxb-...)'
+              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
             },
             channel: {
               type: 'string',
-              description: 'Channel ID (e.g., C1234567890)'
+              description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
             },
             text: {
               type: 'string',
@@ -149,7 +149,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               default: true
             }
           },
-          required: ['token', 'channel', 'text']
+          required: ['text']
         }
       }
     ]
@@ -160,10 +160,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   console.log('Tools/call request:', request.params);
   const { name, arguments: args } = request.params;
 
+  // Helper function to get token and channel with environment variable fallbacks
+  const getTokenAndChannel = (args: any) => {
+    const token = (args as any).token || process.env.SLACK_BOT_TOKEN;
+    const channel = (args as any).channel || process.env.SLACK_DEFAULT_CHANNEL;
+    
+    if (!token) {
+      throw new Error('Slack bot token is required. Provide it as a parameter or set SLACK_BOT_TOKEN environment variable.');
+    }
+    
+    return { token, channel };
+  };
+
   switch (name) {
     case 'get_slack_channels':
       try {
-        const channels = await fetchChannels((args as any).token);
+        const { token } = getTokenAndChannel(args);
+        const channels = await fetchChannels(token);
 
         if (!channels || channels.length === 0) {
           return {
@@ -220,14 +233,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'get_channel_messages':
       try {
-        const messages = await fetchLatestMessagesFromChannel((args as any).token, (args as any).channel);
+        const { token, channel } = getTokenAndChannel(args);
+        
+        if (!channel) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Channel ID is required. Provide it as a parameter or set SLACK_DEFAULT_CHANNEL environment variable.'
+              }
+            ]
+          };
+        }
+
+        const messages = await fetchLatestMessagesFromChannel(token, channel);
 
         if (!messages || messages.length === 0) {
           return {
             content: [
               {
                 type: 'text',
-                text: `No messages found in channel ${(args as any).channel}`
+                text: `No messages found in channel ${channel}`
               }
             ]
           };
@@ -260,7 +286,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         const totalThreadReplies = messages.reduce((sum: number, msg: any) => sum + (msg.thread_replies?.length || 0), 0);
-        const messagesText = `Latest ${messages.length} messages from channel ${(args as any).channel} with ${totalThreadReplies} thread replies:\n\n${formattedMessages.join("\n")}`;
+        const messagesText = `Latest ${messages.length} messages from channel ${channel} with ${totalThreadReplies} thread replies:\n\n${formattedMessages.join("\n")}`;
 
         return {
           content: [
@@ -275,7 +301,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: `Failed to retrieve messages from channel ${(args as any).channel}: ${error instanceof Error ? error.message : "Unknown error"}`
+              text: `Failed to retrieve messages: ${error instanceof Error ? error.message : "Unknown error"}`
             }
           ]
         };
@@ -283,14 +309,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'get_thread_replies':
       try {
-        const messages = await fetchThreadReplies((args as any).token, (args as any).channel, (args as any).thread_ts, (args as any).limit || 50);
+        const { token, channel } = getTokenAndChannel(args);
+        
+        if (!channel) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Channel ID is required. Provide it as a parameter or set SLACK_DEFAULT_CHANNEL environment variable.'
+              }
+            ]
+          };
+        }
+
+        const messages = await fetchThreadReplies(token, channel, (args as any).thread_ts, (args as any).limit || 50);
 
         if (!messages || messages.length <= 1) {
           return {
             content: [
               {
                 type: 'text',
-                text: `No replies found for thread ${(args as any).thread_ts} in channel ${(args as any).channel}`
+                text: `No replies found for thread ${(args as any).thread_ts} in channel ${channel}`
               }
             ]
           };
@@ -345,6 +384,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'send_slack_message':
       try {
+        const { token, channel } = getTokenAndChannel(args);
+        
+        if (!channel) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Channel ID is required. Provide it as a parameter or set SLACK_DEFAULT_CHANNEL environment variable.'
+              }
+            ]
+          };
+        }
+
         const options: any = {};
         
         if ((args as any).thread_ts) {
@@ -362,7 +414,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           options.unfurl_media = (args as any).unfurl_media;
         }
 
-        const result = await sendMessage((args as any).token, (args as any).channel, (args as any).text, options);
+        const result = await sendMessage(token, channel, (args as any).text, options);
         
         const timestamp = new Date(parseFloat(result.ts || '0') * 1000).toLocaleString();
         const threadInfo = (args as any).thread_ts ? " (as thread reply)" : "";
@@ -372,7 +424,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: `Message sent successfully${threadInfo}${broadcastInfo}!\n\nChannel: ${(args as any).channel}\nTimestamp: ${result.ts} (${timestamp})\nMessage: ${(args as any).text}`
+              text: `Message sent successfully${threadInfo}${broadcastInfo}!\n\nChannel: ${channel}\nTimestamp: ${result.ts} (${timestamp})\nMessage: ${(args as any).text}`
             }
           ]
         };
