@@ -56,7 +56,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_slack_channels',
-        description: 'Get list of Slack channels from local storage (fast). Use refresh_all_slack_data first if data might be stale.',
+        description: 'Retrieve all Slack channels/conversations from local storage including regular channels, private channels, DMs, and group DMs. Returns cached data for fast access. Each channel includes ID, name, type, privacy status, member count, topic, and purpose. Use refresh_all_slack_data first if you need current data from Slack.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -65,7 +65,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'refresh_all_slack_data',
-        description: 'Fetches all channels/conversations with their members, then extracts and stores comprehensive user profiles for all discovered members. More efficient than separate channel and user API calls.',
+        description: 'Comprehensive refresh that fetches all channels, extracts user profiles from channel memberships, and stores everything locally. This replaces separate channel/user refreshes with a single efficient operation. Calls Slack API to get: all conversations (channels/DMs/groups), member lists for each, and detailed user profiles (names, emails, timezones, roles). Stores channels, users, and membership relationships in local database.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -74,7 +74,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_slack_users',
-        description: 'Get list of Slack users from local storage with names, display names, and profile info.',
+        description: 'Retrieve all users from local storage with comprehensive profile information including display names, real names, email addresses, profile images, timezones, and role flags (bot, admin, owner, guest types). Only returns users discovered through channel memberships. Use refresh_all_slack_data to update user data.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -83,13 +83,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_channel_members',
-        description: 'Get detailed member list for a specific channel from local storage.',
+        description: 'Get detailed member information for a specific channel from local storage. Returns user profiles for all members including names, roles, and profile data. Requires channel_id parameter. Use refresh_all_slack_data first to ensure current membership data.',
         inputSchema: {
           type: 'object',
           properties: {
             channel_id: {
               type: 'string',
-              description: 'Channel ID to get members for'
+              description: 'Slack channel ID (e.g., C1234567890) to retrieve members for. Find channel IDs using get_slack_channels.'
             }
           },
           required: ['channel_id']
@@ -97,13 +97,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_channel_messages',
-        description: 'Get latest messages from a Slack channel with nested thread replies. Uses SLACK_BOT_TOKEN from environment.',
+        description: 'Fetch recent messages from a Slack channel in real-time via Slack API (not cached). Returns up to 15 messages with full thread replies nested under parent messages. Includes message text, timestamps, user info, reactions, and rich formatting. Limited by Slack API rate limits for non-marketplace apps.',
         inputSchema: {
           type: 'object',
           properties: {
             channel: {
               type: 'string',
-              description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
+              description: 'Slack channel ID (e.g., C1234567890) to fetch messages from. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable. Find channel IDs using get_slack_channels.'
             }
           },
           required: []
@@ -111,21 +111,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_thread_replies',
-        description: 'Get all replies to a specific message thread. Uses SLACK_BOT_TOKEN from environment.',
+        description: 'Retrieve all replies to a specific message thread in real-time via Slack API. Useful for getting complete conversation context around a threaded discussion. Returns chronological list of replies with user info, timestamps, and formatting.',
         inputSchema: {
           type: 'object',
           properties: {
             channel: {
               type: 'string',
-              description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
+              description: 'Slack channel ID containing the thread. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable.'
             },
             thread_ts: {
               type: 'string',
-              description: 'Timestamp of the parent message to get replies for'
+              description: 'Timestamp of the parent message that started the thread (e.g., "1234567890.123456"). Get this from message timestamps in get_channel_messages results.'
             },
             limit: {
               type: 'number',
-              description: 'Maximum number of replies to fetch (default: 50)',
+              description: 'Maximum number of replies to fetch (default: 50, max: 1000)',
               default: 50
             }
           },
@@ -134,35 +134,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'send_slack_message',
-        description: 'Send a message to a Slack channel. Uses SLACK_BOT_TOKEN from environment.',
+        description: 'Send a message to a Slack channel with optional threading and formatting options. Supports replies to existing threads, broadcasting thread replies to main channel, and controlling link/media unfurling. Uses Slack chat.postMessage API.',
         inputSchema: {
           type: 'object',
           properties: {
             channel: {
               type: 'string',
-              description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
+              description: 'Slack channel ID to send message to. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable. Find channel IDs using get_slack_channels.'
             },
             text: {
               type: 'string',
-              description: 'Message text to send'
+              description: 'Message text to send. Supports Slack markdown formatting (bold, italic, links, mentions). Use <@USER_ID> for user mentions and <#CHANNEL_ID> for channel mentions.'
             },
             thread_ts: {
               type: 'string',
-              description: 'Timestamp of parent message if replying to a thread (optional)'
+              description: 'Optional: Reply to this message timestamp to create a threaded reply. Get thread timestamps from get_channel_messages results.'
             },
             reply_broadcast: {
               type: 'boolean',
-              description: 'Whether to broadcast thread reply to the main channel (optional)',
+              description: 'Optional: When replying to a thread, also show the reply in the main channel (default: false)',
               default: false
             },
             unfurl_links: {
               type: 'boolean',
-              description: 'Whether to auto-expand links (optional)',
+              description: 'Optional: Whether Slack should automatically expand links with previews (default: true)',
               default: true
             },
             unfurl_media: {
               type: 'boolean',
-              description: 'Whether to auto-expand media (optional)',
+              description: 'Optional: Whether Slack should automatically expand media links with previews (default: true)',
               default: true
             }
           },
@@ -743,278 +743,156 @@ Ready to make this project a success! 💪
   }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
-
-// Homepage
+// Homepage - Slack OAuth Authorization
 app.get('/', (req, res) => {
-  const currentToken = process.env.SLACK_BOT_TOKEN ? 'Set' : 'Not Set';
-  const currentChannel = process.env.SLACK_DEFAULT_CHANNEL || 'Not Set';
+  const clientId = process.env.SLACK_CLIENT_ID || 'YOUR_CLIENT_ID';
+  const redirectUri = `${req.protocol}://${req.get('host')}/auth/slack/callback`;
   
+  const scopes = [
+    "channels:history",
+    "channels:read", 
+    "channels:write",
+    "chat:write",
+    "files:read",
+    "groups:history",
+    "groups:read",
+    "groups:write", 
+    "im:history",
+    "im:read",
+    "im:write",
+    "links:read",
+    "mpim:history",
+    "mpim:read", 
+    "mpim:write",
+    "reactions:write",
+    "users.profile:read",
+    "users:read",
+    "files:write"
+  ].join(',');
+  
+  const slackAuthUrl = `https://slack.com/oauth/v2/authorize?client_id=${clientId}&user_scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+
   res.setHeader('Content-Type', 'text/html');
   res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Slack MCP Server Configuration</title>
+        <title>Slack MCP Server - Connect to Slack</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
             body { 
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-                max-width: 800px; 
-                margin: 40px auto; 
-                padding: 20px; 
+                max-width: 600px; 
+                margin: 60px auto; 
+                padding: 40px; 
                 background: #f8f9fa; 
+                text-align: center;
             }
             .container { 
                 background: white; 
-                padding: 30px; 
+                padding: 40px; 
+                border-radius: 12px; 
+                box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
+            }
+            h1 { 
+                color: #4A154B; 
+                margin-bottom: 20px; 
+                font-size: 2.5em;
+            }
+            .subtitle {
+                color: #666;
+                font-size: 1.2em;
+                margin-bottom: 30px;
+            }
+            .slack-btn { 
+                display: inline-block; 
+                padding: 16px 32px; 
+                background: #4A154B; 
+                color: #fff; 
                 border-radius: 8px; 
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+                text-decoration: none; 
+                font-size: 18px; 
+                font-weight: bold;
+                transition: background 0.3s;
+                margin: 20px 0;
             }
-            h1 { color: #333; margin-bottom: 30px; }
-            .status { 
-                background: #e3f2fd; 
-                padding: 15px; 
-                border-radius: 6px; 
-                margin-bottom: 25px; 
-                border-left: 4px solid #2196f3; 
+            .slack-btn:hover { 
+                background: #611f69; 
             }
-            .form-group { margin-bottom: 20px; }
-            label { 
-                display: block; 
-                margin-bottom: 8px; 
-                font-weight: 600; 
-                color: #555; 
+            .info-box {
+                background: #e3f2fd;
+                padding: 20px;
+                border-radius: 8px;
+                margin: 30px 0;
+                text-align: left;
             }
-            input[type="text"], input[type="password"] { 
-                width: 100%; 
-                padding: 12px; 
-                border: 2px solid #ddd; 
-                border-radius: 6px; 
-                font-size: 14px; 
-                box-sizing: border-box;
+            .scopes {
+                background: #f5f5f5;
+                padding: 15px;
+                border-radius: 6px;
+                margin: 20px 0;
+                font-family: monospace;
+                font-size: 12px;
+                text-align: left;
             }
-            input:focus { 
-                outline: none; 
-                border-color: #4CAF50; 
+            .step {
+                margin: 15px 0;
+                padding: 10px;
+                border-left: 4px solid #4A154B;
+                background: #fafafa;
             }
-            button { 
-                background: #4CAF50; 
-                color: white; 
-                padding: 12px 24px; 
-                border: none; 
-                border-radius: 6px; 
-                cursor: pointer; 
-                font-size: 16px; 
-                margin-right: 10px; 
-            }
-            button:hover { background: #45a049; }
-            .refresh-btn { background: #2196F3; }
-            .refresh-btn:hover { background: #1976D2; }
-            .help-text { 
-                font-size: 12px; 
-                color: #666; 
-                margin-top: 5px; 
-            }
-            .success { 
-                background: #d4edda; 
-                color: #155724; 
-                padding: 10px; 
-                border-radius: 4px; 
-                margin: 10px 0; 
-            }
-            .error { 
-                background: #f8d7da; 
-                color: #721c24; 
-                padding: 10px; 
-                border-radius: 4px; 
-                margin: 10px 0; 
+            .config-info {
+                background: #fff3cd;
+                border: 1px solid #ffeaa7;
+                padding: 15px;
+                border-radius: 6px;
+                margin: 20px 0;
+                font-size: 14px;
             }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔧 Slack MCP Server Configuration</h1>
+            <h1>🚀 Slack MCP Server</h1>
+            <p class="subtitle">Connect your Slack workspace to get started</p>
             
-            <div class="status">
-                <h3>Current Status</h3>
-                <p><strong>Slack Bot Token:</strong> ${currentToken}</p>
-                <p><strong>Default Channel:</strong> ${currentChannel}</p>
-                <p><strong>MCP Endpoint:</strong> <code>${req.get('host')}/mcp</code></p>
+            <div class="info-box">
+                <h3>📋 What This Does:</h3>
+                <div class="step">1. Redirects you to Slack for authorization</div>
+                <div class="step">2. You approve the requested permissions</div>
+                <div class="step">3. Slack redirects back with your access token</div>
+                <div class="step">4. Copy the token to use with MCP clients</div>
             </div>
 
-            <form action="/configure" method="post" style="margin-bottom: 20px;">
-                <div class="form-group">
-                    <label for="token">Slack Bot Token (xoxb-...)</label>
-                    <input type="password" id="token" name="token" placeholder="Enter your Slack bot token">
-                    <div class="help-text">
-                        Get this from your Slack app's OAuth & Permissions page. Required scopes: 
-                        channels:read, channels:history, chat:write, users:read
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="channel">Default Channel ID (optional)</label>
-                    <input type="text" id="channel" name="channel" placeholder="C1234567890" value="${currentChannel !== 'Not Set' ? currentChannel : ''}">
-                    <div class="help-text">
-                        Optional default channel for operations. You can still specify channels in individual tool calls.
-                    </div>
-                </div>
-                
-                <button type="submit">💾 Save Configuration</button>
-            </form>
+            <a href="${slackAuthUrl}" class="slack-btn">
+                📱 Connect to Slack
+            </a>
 
-            <div style="border-top: 1px solid #eee; padding-top: 20px;">
-                <h3>Data Management</h3>
-                <p>After configuring your token, refresh the local data cache:</p>
-                <button onclick="refreshData('all')" class="refresh-btn">🔄 Refresh All Slack Data</button>
+            <div class="info-box">
+                <h3>🔑 Requested Permissions:</h3>
+                <div class="scopes">${scopes.split(',').join('<br>')}</div>
             </div>
 
-            <div id="message"></div>
+            <div class="config-info">
+                <strong>⚙️ Configuration:</strong><br>
+                Client ID: <code>${clientId}</code><br>
+                Redirect URI: <code>${redirectUri}</code><br>
+                MCP Endpoint: <code>${req.protocol}://${req.get('host')}/mcp</code>
+            </div>
+
+            ${clientId === 'YOUR_CLIENT_ID' ? `
+            <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                <strong>⚠️ Setup Required:</strong><br>
+                Please set your SLACK_CLIENT_ID environment variable before using OAuth.
+            </div>
+            ` : ''}
         </div>
-
-        <script>
-            async function refreshData(type) {
-                const messageDiv = document.getElementById('message');
-                messageDiv.innerHTML = '<div class="status">Refreshing ' + type + ' data...</div>';
-                
-                try {
-                    const response = await fetch('/refresh/' + type, { method: 'POST' });
-                    const result = await response.text();
-                    
-                    if (response.ok) {
-                        messageDiv.innerHTML = '<div class="success">✅ ' + result + '</div>';
-                    } else {
-                        messageDiv.innerHTML = '<div class="error">❌ ' + result + '</div>';
-                    }
-                } catch (error) {
-                    messageDiv.innerHTML = '<div class="error">❌ Error: ' + error.message + '</div>';
-                }
-            }
-
-            // Handle form submission
-            const form = document.querySelector('form');
-            form.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const formData = new FormData(form);
-                const messageDiv = document.getElementById('message');
-                
-                try {
-                    const response = await fetch('/configure', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const result = await response.text();
-                    
-                    if (response.ok) {
-                        messageDiv.innerHTML = '<div class="success">✅ ' + result + '</div>';
-                        setTimeout(() => location.reload(), 1500);
-                    } else {
-                        messageDiv.innerHTML = '<div class="error">❌ ' + result + '</div>';
-                    }
-                } catch (error) {
-                    messageDiv.innerHTML = '<div class="error">❌ Error: ' + error.message + '</div>';
-                }
-            });
-        </script>
     </body>
     </html>
   `);
 });
 
-app.post('/configure', express.urlencoded({ extended: true }), (req, res) => {
-  const { token, channel } = req.body;
-  
-  if (!token || !token.startsWith('xoxb-')) {
-    return res.status(400).send('Valid Slack bot token is required (must start with xoxb-)');
-  }
-  
-  // Note: In production, you'd want to store these securely
-  // For now, we'll just indicate success but note they need to be set in environment
-  res.send(`Configuration received! Please set these environment variables:
-    SLACK_BOT_TOKEN=${token}
-    ${channel ? `SLACK_DEFAULT_CHANNEL=${channel}` : ''}
-    
-    Then restart the server for changes to take effect.`);
-});
 
-app.post('/refresh/all', async (req, res) => {
-  try {
-    const token = process.env.SLACK_BOT_TOKEN;
-    if (!token) {
-      return res.status(400).send('SLACK_BOT_TOKEN environment variable not set');
-    }
-    
-    // Use the unified refresh function
-    const result = await refreshAllSlackData(token);
-    
-    // Transform and store all data (same logic as MCP tool)
-    const storedChannels: StoredChannel[] = result.conversations.map((channel: any) => ({
-      id: channel.id,
-      name: channel.name || '',
-      type: channel.type || 'channel',
-      is_private: channel.is_private || false,
-      is_archived: channel.is_archived || false,
-      topic: channel.topic?.value || '',
-      purpose: channel.purpose?.value || '',
-      num_members: channel.num_members || channel.member_ids?.length || 0,
-      created: channel.created || Date.now() / 1000,
-      updated_at: Date.now()
-    }));
-    
-    const storedUsers: StoredUser[] = result.users.map((user: any) => ({
-      id: user.id,
-      name: user.name || '',
-      display_name: user.display_name || '',
-      real_name: user.real_name || '',
-      email: user.email || '',
-      is_bot: user.is_bot || false,
-      is_deleted: user.is_deleted || false,
-      is_restricted: user.is_restricted || false,
-      is_ultra_restricted: user.is_ultra_restricted || false,
-      is_stranger: false,
-      is_app_user: user.is_app_user || false,
-      is_external: false,
-      is_admin: user.is_admin || false,
-      is_owner: user.is_owner || false,
-      profile_image: user.profile_image || '',
-      timezone: user.timezone || '',
-      locale: user.locale || '',
-      team_id: user.team_id || '',
-      updated_at: user.updated_at || Date.now()
-    }));
-    
-    const memberships: ChannelMembership[] = [];
-    for (const channel of result.conversations) {
-      if (channel.member_ids) {
-        for (const userId of channel.member_ids) {
-          memberships.push({
-            channel_id: channel.id,
-            user_id: userId,
-            added_at: Date.now()
-          });
-        }
-      }
-    }
-    
-    // Store everything
-    await Promise.all([
-      dbService.storeChannels(storedChannels),
-      dbService.storeUsers(storedUsers),
-      dbService.storeChannelMemberships(memberships)
-    ]);
-    
-    res.send(`Successfully refreshed all Slack data:
-    - ${storedChannels.length} conversations (channels/DMs)
-    - ${storedUsers.length} unique users  
-    - ${memberships.length} memberships`);
-  } catch (error) {
-    res.status(500).send(`Error refreshing Slack data: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-});
 
 // MCP endpoint using SDK transport
 app.post('/mcp', async (req, res) => {
@@ -1039,6 +917,239 @@ app.post('/mcp', async (req, res) => {
       error: { code: -32603, message: 'Internal error' },
       id: null
     });
+  }
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// OAuth callback endpoint
+app.get('/auth/slack/callback', async (req, res) => {
+  const { code, error } = req.query;
+  
+  if (error) {
+    return res.status(400).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>Slack Authorization Error</title>
+          <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 60px auto; padding: 40px; background: #f8f9fa; text-align: center; }
+              .container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+              .error { background: #f8d7da; color: #721c24; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>❌ Authorization Error</h1>
+              <div class="error">
+                  <strong>Error:</strong> ${error}<br>
+                  The Slack authorization was not completed successfully.
+              </div>
+              <a href="/">← Back to Authorization</a>
+          </div>
+      </body>
+      </html>
+    `);
+  }
+
+  if (!code) {
+    return res.status(400).send('Missing authorization code');
+  }
+
+  try {
+    const clientId = process.env.SLACK_CLIENT_ID;
+    const clientSecret = process.env.SLACK_CLIENT_SECRET;
+    const redirectUri = `${req.protocol}://${req.get('host')}/auth/slack/callback`;
+
+    if (!clientId || !clientSecret) {
+      throw new Error('Missing SLACK_CLIENT_ID or SLACK_CLIENT_SECRET environment variables');
+    }
+
+    // Exchange authorization code for access token
+    const tokenResponse = await fetch('https://slack.com/api/oauth.v2.access', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code: code as string,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenData.ok) {
+      throw new Error(`Slack API error: ${tokenData.error}`);
+    }
+
+    // Get user token (this is what they'll use with MCP)
+    const userToken = tokenData.authed_user?.access_token;
+    const teamName = tokenData.team?.name;
+    const userName = tokenData.authed_user?.id;
+
+    if (!userToken) {
+      throw new Error('No user access token received from Slack');
+    }
+
+    // Success page with token
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>Slack Authorization Success</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+              body { 
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+                  max-width: 700px; 
+                  margin: 60px auto; 
+                  padding: 40px; 
+                  background: #f8f9fa; 
+                  text-align: center;
+              }
+              .container { 
+                  background: white; 
+                  padding: 40px; 
+                  border-radius: 12px; 
+                  box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
+              }
+              h1 { 
+                  color: #4A154B; 
+                  margin-bottom: 20px; 
+                  font-size: 2.5em;
+              }
+              .success { 
+                  background: #d4edda; 
+                  color: #155724; 
+                  padding: 20px; 
+                  border-radius: 8px; 
+                  margin: 20px 0; 
+              }
+              .token-box {
+                  background: #f8f9fa;
+                  border: 2px solid #4A154B;
+                  padding: 20px;
+                  border-radius: 8px;
+                  margin: 30px 0;
+                  font-family: 'Monaco', 'Consolas', monospace;
+                  word-break: break-all;
+                  text-align: left;
+                  position: relative;
+              }
+              .copy-btn {
+                  position: absolute;
+                  top: 10px;
+                  right: 10px;
+                  background: #4A154B;
+                  color: white;
+                  border: none;
+                  padding: 8px 12px;
+                  border-radius: 4px;
+                  cursor: pointer;
+                  font-size: 12px;
+              }
+              .copy-btn:hover {
+                  background: #611f69;
+              }
+              .instructions {
+                  background: #e3f2fd;
+                  padding: 20px;
+                  border-radius: 8px;
+                  margin: 30px 0;
+                  text-align: left;
+              }
+              .step {
+                  margin: 10px 0;
+                  padding: 8px;
+                  border-left: 3px solid #4A154B;
+                  background: #fafafa;
+              }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>🎉 Success!</h1>
+              
+              <div class="success">
+                  <strong>✅ Slack Authorization Complete</strong><br>
+                  Team: <strong>${teamName || 'Unknown'}</strong><br>
+                  User: <strong>${userName || 'Unknown'}</strong>
+              </div>
+
+              <h2>📋 Your Slack Access Token</h2>
+              <p>Copy this token to use with your MCP client:</p>
+              
+              <div class="token-box">
+                  <button class="copy-btn" onclick="copyToken()">📋 Copy</button>
+                  <div id="token">${userToken}</div>
+              </div>
+
+              <div class="instructions">
+                  <h3>🔧 How to Use This Token:</h3>
+                  <div class="step">1. Copy the token above</div>
+                  <div class="step">2. Set it as SLACK_BOT_TOKEN in your environment</div>
+                  <div class="step">3. Configure your MCP client to use: <code>${req.protocol}://${req.get('host')}/mcp</code></div>
+                  <div class="step">4. Start using Slack tools in your MCP client!</div>
+              </div>
+
+              <p style="margin-top: 30px;">
+                  <a href="/">← Authorize Another Account</a>
+              </p>
+          </div>
+
+          <script>
+              function copyToken() {
+                  const tokenText = document.getElementById('token').textContent;
+                  navigator.clipboard.writeText(tokenText).then(() => {
+                      const btn = document.querySelector('.copy-btn');
+                      const originalText = btn.textContent;
+                      btn.textContent = '✅ Copied!';
+                      btn.style.background = '#28a745';
+                      setTimeout(() => {
+                          btn.textContent = originalText;
+                          btn.style.background = '#4A154B';
+                      }, 2000);
+                  }).catch(() => {
+                      alert('Failed to copy token. Please select and copy manually.');
+                  });
+              }
+          </script>
+      </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>Slack Authorization Error</title>
+          <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 60px auto; padding: 40px; background: #f8f9fa; text-align: center; }
+              .container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+              .error { background: #f8d7da; color: #721c24; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>❌ Authorization Error</h1>
+              <div class="error">
+                  <strong>Error:</strong> ${error.message}<br>
+                  Please check your server configuration and try again.
+              </div>
+              <a href="/">← Back to Authorization</a>
+          </div>
+      </body>
+      </html>
+    `);
   }
 });
 

@@ -34,25 +34,78 @@ This MCP server provides comprehensive Slack workspace integration through Claud
 
 ## Quick Start
 
-### 1. Installation
+### 1. Create a Slack App
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps)
+2. Click "Create New App" → "From scratch"
+3. Name your app and select your workspace
+4. Go to **OAuth & Permissions**
+5. Add the following **User Token Scopes**:
+   ```
+   channels:history, channels:read, channels:write, chat:write, files:read, 
+   groups:history, groups:read, groups:write, im:history, im:read, im:write, 
+   links:read, mpim:history, mpim:read, mpim:write, reactions:write, 
+   users.profile:read, users:read, files:write
+   ```
+6. Set **Redirect URLs** to: `http://localhost:8080/auth/slack/callback`
+7. Go to **Basic Information** and copy your **Client ID** and **Client Secret**
+
+### 2. Configure Environment
+
+Create a `.env` file with your Slack app credentials:
+
 ```bash
-cd slack-mcp-server
+# Required for OAuth flow
+SLACK_CLIENT_ID=your_slack_client_id_here
+SLACK_CLIENT_SECRET=your_slack_client_secret_here
+
+# Optional
+PORT=8080
+SLACK_DEFAULT_CHANNEL=C1234567890
+```
+
+### 3. Install & Run
+
+```bash
 npm install
-```
-
-### 2. Build
-```bash
-npm run build
-```
-
-### 3. Development
-```bash
 npm run dev
 ```
 
-### 4. Production
+### 4. Authorize Your Slack Account
+
+1. Open [http://localhost:8080](http://localhost:8080)
+2. Click "Connect to Slack"
+3. Authorize the app in Slack
+4. Copy the access token from the success page
+5. Set `SLACK_BOT_TOKEN=<your_token>` in your environment
+
+### 5. Use with MCP Client
+
+Configure your MCP client to use: `http://localhost:8080/mcp`
+
+## 🛠 Available Tools
+
+- `list_channels` - Get all channels/DMs with member info
+- `list_users` - Get all users with profiles
+- `get_channel_members` - Get members of a specific channel
+- `get_channel_messages` - Fetch recent messages from a channel
+- `get_thread_replies` - Get replies to a message thread
+- `send_message` - Send a message to a channel
+- `refresh_all_slack_data` - Update local cache with latest Slack data
+
+## 📡 Endpoints
+
+- **Homepage**: `http://localhost:8080/` - OAuth authorization
+- **MCP Server**: `http://localhost:8080/mcp` - MCP protocol endpoint
+- **Health Check**: `http://localhost:8080/health` - Server status
+- **OAuth Callback**: `http://localhost:8080/auth/slack/callback` - Slack OAuth redirect
+
+## 🔧 Development
+
 ```bash
-npm start
+npm run build    # Compile TypeScript
+npm start        # Run compiled version
+npm run dev      # Development mode with auto-reload
 ```
 
 ## Deployment
