@@ -55,88 +55,6 @@ export async function sendMessage(
   return slack.chat.postMessage(messageParams);
 }
 
-export async function fetchChannels(token: string) {
-  const slack = getSlackClient(token);
-  const result = await slack.conversations.list({
-    exclude_archived: true,
-    types: 'public_channel,private_channel,im,mpim',
-    limit: 1000
-  });
-
-  const channels = (result.channels || []).filter((c: any) => {
-    if (c.is_channel || c.is_group || c.is_mpim) {
-      return c.is_member && !c.is_archived;
-    }
-    if (c.is_im) {
-      return !c.is_archived && !c.is_user_deleted;
-    }
-    return false;
-  });
-
-  const enrichedChannels = await Promise.all(
-    channels.map(async (c: any) => {
-      let membersInfo: any[] = [];
-      if ((c.is_channel || c.is_group || c.is_mpim)) {
-        // Fetch member IDs for the channel
-        let memberIds: string[] = [];
-        try {
-          const membersRes = await slack.conversations.members({ channel: c.id });
-          memberIds = membersRes.members as string[];
-        } catch {
-          memberIds = [];
-        }
-        // Fetch user info for each member
-        membersInfo = await Promise.all(
-          memberIds.map(async (userId: string) => {
-            try {
-              const userInfo = await slack.users.info({ user: userId });
-              return {
-                id: userId,
-                name: userInfo.user?.real_name || userInfo.user?.profile?.display_name || userInfo.user?.name || userId,
-                is_deleted: userInfo.user?.deleted || false
-              };
-            } catch {
-              return { id: userId, name: userId, is_deleted: true };
-            }
-          })
-        );
-      }
-
-      if (c.is_im && c.user) {
-        const userInfo = await slack.users.info({ user: c.user });
-        return {
-          id: c.id,
-          name: userInfo.user?.real_name || userInfo.user?.profile?.display_name || userInfo.user?.name || c.user,
-          type: 'im',
-          is_user_deleted: userInfo.user?.deleted || false,
-          created: c.created,
-          is_active: !c.is_archived && !userInfo.user?.deleted,
-          user_id: c.user
-        };
-      } else {
-        return {
-          id: c.id,
-          name: c.name,
-          type: c.is_channel ? 'channel' : c.is_group ? 'group' : c.is_mpim ? 'mpim' : 'other',
-          is_ext_shared: !!c.is_ext_shared,
-          is_private: !!c.is_private,
-          is_archived: !!c.is_archived,
-          is_member: !!c.is_member,
-          num_members: c.num_members,
-          topic: c.topic?.value || '',
-          purpose: c.purpose?.value || '',
-          created: c.created,
-          creator: c.creator,
-          members: membersInfo,
-          is_active: !c.is_archived
-        };
-      }
-    })
-  );
-
-  return enrichedChannels;
-}
-
 export async function fetchThreadReplies(token: string, channelId: string, threadTs: string, limit = 50) {
   const slack = getSlackClient(token);
   
@@ -290,26 +208,6 @@ export async function fetchLatestMessagesFromChannel(token: string, channelId: s
   }
 }
 
-// New function to fetch all users
-export async function fetchUsers(token: string) {
-  const web = new WebClient(token);
-  
-  try {
-    const result = await web.users.list({
-      limit: 1000 // Adjust as needed
-    });
-    
-    if (!result.ok) {
-      throw new Error(`Slack API error: ${result.error}`);
-    }
-    
-    return result.members || [];
-  } catch (error) {
-    console.error('Error fetching users:', error);
-    throw error;
-  }
-}
-
 // New function to fetch user info by ID
 export async function fetchUserInfo(token: string, userId: string) {
   const web = new WebClient(token);
@@ -331,13 +229,13 @@ export async function fetchUserInfo(token: string, userId: string) {
 }
 
 // Enhanced function to fetch channels with member details
-export async function fetchChannelsWithMembers(token: string) {
+export async function fetchChannelsWithMembers(token: string, includeFullMemberDetails = false) {
   const web = new WebClient(token);
   
   try {
-    // Get all channels
+    // Get all conversation types including DMs
     const channelsResult = await web.conversations.list({
-      types: 'public_channel,private_channel',
+      types: 'public_channel,private_channel,im,mpim',
       limit: 1000
     });
     
@@ -345,40 +243,205 @@ export async function fetchChannelsWithMembers(token: string) {
       throw new Error(`Slack API error: ${channelsResult.error}`);
     }
     
-    const channels = channelsResult.channels || [];
-    const channelsWithMembers = [];
+    const allConversations = channelsResult.channels || [];
+    const conversationsWithMembers = [];
     
-    // For each channel, get its members
-    for (const channel of channels) {
+    // For each conversation, get its members (different handling for DMs vs channels)
+    for (const conversation of allConversations) {
       try {
-        const membersResult = await web.conversations.members({
-          channel: channel.id
-        });
-        
-        if (membersResult.ok) {
-          channelsWithMembers.push({
-            ...channel,
-            member_ids: membersResult.members || []
+        if (conversation.is_im) {
+          // For DMs, we don't need to fetch members - it's just the other user
+          let memberDetails = undefined;
+          
+          // If full details requested, get user info for DM partner
+          if (includeFullMemberDetails && conversation.user) {
+            try {
+              const userInfo = await web.users.info({ user: conversation.user });
+              memberDetails = [{
+                id: conversation.user,
+                name: userInfo.user?.name || '',
+                display_name: userInfo.user?.profile?.display_name || '',
+                real_name: userInfo.user?.real_name || '',
+                email: userInfo.user?.profile?.email || '',
+                is_bot: userInfo.user?.is_bot || false,
+                is_deleted: userInfo.user?.deleted || false,
+                is_restricted: userInfo.user?.is_restricted || false,
+                is_ultra_restricted: userInfo.user?.is_ultra_restricted || false,
+                is_app_user: userInfo.user?.is_app_user || false,
+                is_admin: userInfo.user?.is_admin || false,
+                is_owner: userInfo.user?.is_owner || false,
+                profile_image: userInfo.user?.profile?.image_72 || '',
+                timezone: userInfo.user?.tz || '',
+                locale: userInfo.user?.locale || '',
+                team_id: userInfo.user?.team_id || '',
+                updated_at: Date.now()
+              }];
+            } catch (error) {
+              console.warn(`Could not fetch user details for ${conversation.user}:`, error);
+              memberDetails = [{ id: conversation.user, name: conversation.user, is_deleted: false }];
+            }
+          }
+          
+          conversationsWithMembers.push({
+            ...conversation,
+            member_ids: conversation.user ? [conversation.user] : [],
+            member_details: memberDetails,
+            type: 'im'
+          });
+        } else if (conversation.is_mpim) {
+          // For multi-person DMs, get the member list
+          const membersResult = await web.conversations.members({
+            channel: conversation.id
+          });
+          
+          const memberIds = membersResult.ok ? (membersResult.members || []) : [];
+          let memberDetails = undefined;
+          
+          // If full details requested, get user info for each member
+          if (includeFullMemberDetails && memberIds.length > 0) {
+            memberDetails = await Promise.all(
+              memberIds.map(async (userId: string) => {
+                try {
+                  const userInfo = await web.users.info({ user: userId });
+                  return {
+                    id: userId,
+                    name: userInfo.user?.name || '',
+                    display_name: userInfo.user?.profile?.display_name || '',
+                    real_name: userInfo.user?.real_name || '',
+                    email: userInfo.user?.profile?.email || '',
+                    is_bot: userInfo.user?.is_bot || false,
+                    is_deleted: userInfo.user?.deleted || false,
+                    is_restricted: userInfo.user?.is_restricted || false,
+                    is_ultra_restricted: userInfo.user?.is_ultra_restricted || false,
+                    is_app_user: userInfo.user?.is_app_user || false,
+                    is_admin: userInfo.user?.is_admin || false,
+                    is_owner: userInfo.user?.is_owner || false,
+                    profile_image: userInfo.user?.profile?.image_72 || '',
+                    timezone: userInfo.user?.tz || '',
+                    locale: userInfo.user?.locale || '',
+                    team_id: userInfo.user?.team_id || '',
+                    updated_at: Date.now()
+                  };
+                } catch (error) {
+                  console.warn(`Could not fetch user details for ${userId}:`, error);
+                  return { id: userId, name: userId, is_deleted: false };
+                }
+              })
+            );
+          }
+          
+          conversationsWithMembers.push({
+            ...conversation,
+            member_ids: memberIds,
+            member_details: memberDetails,
+            type: 'mpim'
           });
         } else {
-          // If we can't get members (e.g., private channel), still include the channel
-          channelsWithMembers.push({
-            ...channel,
-            member_ids: []
+          // For regular channels (public/private), get the member list
+          const membersResult = await web.conversations.members({
+            channel: conversation.id
+          });
+          
+          const memberIds = membersResult.ok ? (membersResult.members || []) : [];
+          let memberDetails = undefined;
+          
+          // If full details requested, get user info for each member
+          if (includeFullMemberDetails && memberIds.length > 0) {
+            memberDetails = await Promise.all(
+              memberIds.map(async (userId: string) => {
+                try {
+                  const userInfo = await web.users.info({ user: userId });
+                  return {
+                    id: userId,
+                    name: userInfo.user?.name || '',
+                    display_name: userInfo.user?.profile?.display_name || '',
+                    real_name: userInfo.user?.real_name || '',
+                    email: userInfo.user?.profile?.email || '',
+                    is_bot: userInfo.user?.is_bot || false,
+                    is_deleted: userInfo.user?.deleted || false,
+                    is_restricted: userInfo.user?.is_restricted || false,
+                    is_ultra_restricted: userInfo.user?.is_ultra_restricted || false,
+                    is_app_user: userInfo.user?.is_app_user || false,
+                    is_admin: userInfo.user?.is_admin || false,
+                    is_owner: userInfo.user?.is_owner || false,
+                    profile_image: userInfo.user?.profile?.image_72 || '',
+                    timezone: userInfo.user?.tz || '',
+                    locale: userInfo.user?.locale || '',
+                    team_id: userInfo.user?.team_id || '',
+                    updated_at: Date.now()
+                  };
+                } catch (error) {
+                  console.warn(`Could not fetch user details for ${userId}:`, error);
+                  return { id: userId, name: userId, is_deleted: false };
+                }
+              })
+            );
+          }
+          
+          conversationsWithMembers.push({
+            ...conversation,
+            member_ids: memberIds,
+            member_details: memberDetails,
+            type: conversation.is_private ? 'private_channel' : 'public_channel'
           });
         }
       } catch (memberError) {
-        console.warn(`Could not fetch members for channel ${channel.id}:`, memberError);
-        channelsWithMembers.push({
-          ...channel,
-          member_ids: []
+        console.warn(`Could not fetch members for conversation ${conversation.id}:`, memberError);
+        conversationsWithMembers.push({
+          ...conversation,
+          member_ids: [],
+          member_details: includeFullMemberDetails ? [] : undefined,
+          type: conversation.is_im ? 'im' : conversation.is_mpim ? 'mpim' : 
+                conversation.is_private ? 'private_channel' : 'public_channel'
         });
       }
     }
     
-    return channelsWithMembers;
+    const memberDetailMessage = includeFullMemberDetails ? " with full member details" : " with member IDs only";
+    console.log(`Fetched ${conversationsWithMembers.length} conversations${memberDetailMessage} including:
+      - Channels: ${conversationsWithMembers.filter(c => c.type.includes('channel')).length}
+      - DMs: ${conversationsWithMembers.filter(c => c.type === 'im').length}  
+      - Group DMs: ${conversationsWithMembers.filter(c => c.type === 'mpim').length}`);
+    
+    return conversationsWithMembers;
   } catch (error) {
-    console.error('Error fetching channels with members:', error);
+    console.error('Error fetching conversations with members:', error);
+    throw error;
+  }
+}
+
+// Unified function to refresh all Slack data (channels, users, and memberships) in one operation
+export async function refreshAllSlackData(token: string) {
+  try {
+    // Fetch all conversations with full member details
+    const conversations = await fetchChannelsWithMembers(token, true);
+    
+    // Extract all unique users from all conversations
+    const allUsers = new Map(); // Use Map to deduplicate by user ID
+    
+    for (const conversation of conversations) {
+      if (conversation.member_details) {
+        for (const user of conversation.member_details) {
+          allUsers.set(user.id, user);
+        }
+      }
+    }
+    
+    // Convert Map to array
+    const uniqueUsers = Array.from(allUsers.values());
+    
+    console.log(`Unified refresh collected:
+      - ${conversations.length} conversations (channels/DMs)
+      - ${uniqueUsers.length} unique users
+      - ${conversations.reduce((sum, c) => sum + (c.member_ids?.length || 0), 0)} total memberships`);
+    
+    return {
+      conversations,
+      users: uniqueUsers,
+      totalMemberships: conversations.reduce((sum, c) => sum + (c.member_ids?.length || 0), 0)
+    };
+  } catch (error) {
+    console.error('Error in unified Slack data refresh:', error);
     throw error;
   }
 } 

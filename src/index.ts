@@ -13,7 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import cors from 'cors';
-import { fetchChannels, fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage, fetchUsers, fetchChannelsWithMembers } from './slack.js';
+import { fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage, fetchChannelsWithMembers, refreshAllSlackData } from './slack.js';
 import { dbService, StoredChannel, StoredUser, ChannelMembership } from './database.js';
 
 const app = express();
@@ -56,7 +56,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_slack_channels',
-        description: 'Get list of Slack channels from local storage (fast). Use refresh_channel_data first if data might be stale.',
+        description: 'Get list of Slack channels from local storage (fast). Use refresh_all_slack_data first if data might be stale.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -64,17 +64,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         }
       },
       {
-        name: 'refresh_channel_data',
-        description: 'Refresh channel data from Slack API and store locally. Fetches channels, users, and memberships.',
-        inputSchema: {
-          type: 'object',
-          properties: {},
-          required: []
-        }
-      },
-      {
-        name: 'refresh_user_data',
-        description: 'Refresh user data from Slack API and store locally. Updates user profiles and information.',
+        name: 'refresh_all_slack_data',
+        description: 'Fetches all channels/conversations with their members, then extracts and stores comprehensive user profiles for all discovered members. More efficient than separate channel and user API calls.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -177,7 +168,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['text']
         }
-      }
+      },
     ]
   };
 });
@@ -211,14 +202,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case 'refresh_channel_data': {
+      case 'refresh_all_slack_data': {
         const { token } = getTokenAndChannel({});
         
-        // Fetch channels with member IDs
-        const channels = await fetchChannelsWithMembers(token);
+        // Use the unified refresh function
+        const result = await refreshAllSlackData(token);
         
-        // Transform to stored format
-        const storedChannels: StoredChannel[] = channels.map((channel: any) => ({
+        // Transform conversations to stored channel format
+        const storedChannels: StoredChannel[] = result.conversations.map((channel: any) => ({
           id: channel.id,
           name: channel.name || '',
           type: channel.type || 'channel',
@@ -231,12 +222,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           updated_at: Date.now()
         }));
         
-        // Store channels
-        await dbService.storeChannels(storedChannels);
+        // Transform users to stored format
+        const storedUsers: StoredUser[] = result.users.map((user: any) => ({
+          id: user.id,
+          name: user.name || '',
+          display_name: user.display_name || '',
+          real_name: user.real_name || '',
+          email: user.email || '',
+          is_bot: user.is_bot || false,
+          is_deleted: user.is_deleted || false,
+          is_restricted: user.is_restricted || false,
+          is_ultra_restricted: user.is_ultra_restricted || false,
+          is_stranger: false, // Not available in Slack API
+          is_app_user: user.is_app_user || false,
+          is_external: false, // Not available in Slack API
+          is_admin: user.is_admin || false,
+          is_owner: user.is_owner || false,
+          profile_image: user.profile_image || '',
+          timezone: user.timezone || '',
+          locale: user.locale || '',
+          team_id: user.team_id || '',
+          updated_at: user.updated_at || Date.now()
+        }));
         
         // Create memberships
         const memberships: ChannelMembership[] = [];
-        for (const channel of channels) {
+        for (const channel of result.conversations) {
           if (channel.member_ids) {
             for (const userId of channel.member_ids) {
               memberships.push({
@@ -248,47 +259,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
         
-        // Store memberships
-        await dbService.storeChannelMemberships(memberships);
+        // Store everything in parallel
+        await Promise.all([
+          dbService.storeChannels(storedChannels),
+          dbService.storeUsers(storedUsers),
+          dbService.storeChannelMemberships(memberships)
+        ]);
         
         return {
           content: [
             {
               type: 'text',
-              text: `Successfully refreshed ${storedChannels.length} channels and ${memberships.length} memberships`
-            }
-          ]
-        };
-      }
-
-      case 'refresh_user_data': {
-        const { token } = getTokenAndChannel({});
-        
-        // Fetch all users
-        const users = await fetchUsers(token);
-        
-        // Transform to stored format
-        const storedUsers: StoredUser[] = users.map((user: any) => ({
-          id: user.id,
-          name: user.name || '',
-          display_name: user.profile?.display_name || '',
-          real_name: user.profile?.real_name || '',
-          email: user.profile?.email || '',
-          is_bot: user.is_bot || false,
-          is_deleted: user.deleted || false,
-          profile_image: user.profile?.image_72 || '',
-          timezone: user.tz || '',
-          updated_at: Date.now()
-        }));
-        
-        // Store users
-        await dbService.storeUsers(storedUsers);
-        
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Successfully refreshed ${storedUsers.length} users`
+              text: `Successfully refreshed all Slack data:
+              - ${storedChannels.length} conversations (channels/DMs)
+              - ${storedUsers.length} unique users
+              - ${memberships.length} memberships`
             }
           ]
         };
@@ -885,8 +870,7 @@ app.get('/', (req, res) => {
             <div style="border-top: 1px solid #eee; padding-top: 20px;">
                 <h3>Data Management</h3>
                 <p>After configuring your token, refresh the local data cache:</p>
-                <button onclick="refreshData('channels')" class="refresh-btn">🔄 Refresh Channel Data</button>
-                <button onclick="refreshData('users')" class="refresh-btn">👥 Refresh User Data</button>
+                <button onclick="refreshData('all')" class="refresh-btn">🔄 Refresh All Slack Data</button>
             </div>
 
             <div id="message"></div>
@@ -957,18 +941,18 @@ app.post('/configure', express.urlencoded({ extended: true }), (req, res) => {
     Then restart the server for changes to take effect.`);
 });
 
-app.post('/refresh/channels', async (req, res) => {
+app.post('/refresh/all', async (req, res) => {
   try {
     const token = process.env.SLACK_BOT_TOKEN;
     if (!token) {
       return res.status(400).send('SLACK_BOT_TOKEN environment variable not set');
     }
     
-    // Fetch channels with member IDs
-    const channels = await fetchChannelsWithMembers(token);
+    // Use the unified refresh function
+    const result = await refreshAllSlackData(token);
     
-    // Transform to stored format
-    const storedChannels: StoredChannel[] = channels.map((channel: any) => ({
+    // Transform and store all data (same logic as MCP tool)
+    const storedChannels: StoredChannel[] = result.conversations.map((channel: any) => ({
       id: channel.id,
       name: channel.name || '',
       type: channel.type || 'channel',
@@ -981,12 +965,30 @@ app.post('/refresh/channels', async (req, res) => {
       updated_at: Date.now()
     }));
     
-    // Store channels
-    await dbService.storeChannels(storedChannels);
+    const storedUsers: StoredUser[] = result.users.map((user: any) => ({
+      id: user.id,
+      name: user.name || '',
+      display_name: user.display_name || '',
+      real_name: user.real_name || '',
+      email: user.email || '',
+      is_bot: user.is_bot || false,
+      is_deleted: user.is_deleted || false,
+      is_restricted: user.is_restricted || false,
+      is_ultra_restricted: user.is_ultra_restricted || false,
+      is_stranger: false,
+      is_app_user: user.is_app_user || false,
+      is_external: false,
+      is_admin: user.is_admin || false,
+      is_owner: user.is_owner || false,
+      profile_image: user.profile_image || '',
+      timezone: user.timezone || '',
+      locale: user.locale || '',
+      team_id: user.team_id || '',
+      updated_at: user.updated_at || Date.now()
+    }));
     
-    // Create memberships
     const memberships: ChannelMembership[] = [];
-    for (const channel of channels) {
+    for (const channel of result.conversations) {
       if (channel.member_ids) {
         for (const userId of channel.member_ids) {
           memberships.push({
@@ -998,45 +1000,19 @@ app.post('/refresh/channels', async (req, res) => {
       }
     }
     
-    // Store memberships
-    await dbService.storeChannelMemberships(memberships);
+    // Store everything
+    await Promise.all([
+      dbService.storeChannels(storedChannels),
+      dbService.storeUsers(storedUsers),
+      dbService.storeChannelMemberships(memberships)
+    ]);
     
-    res.send(`Successfully refreshed ${storedChannels.length} channels and ${memberships.length} memberships`);
+    res.send(`Successfully refreshed all Slack data:
+    - ${storedChannels.length} conversations (channels/DMs)
+    - ${storedUsers.length} unique users  
+    - ${memberships.length} memberships`);
   } catch (error) {
-    res.status(500).send(`Error refreshing channels: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-});
-
-app.post('/refresh/users', async (req, res) => {
-  try {
-    const token = process.env.SLACK_BOT_TOKEN;
-    if (!token) {
-      return res.status(400).send('SLACK_BOT_TOKEN environment variable not set');
-    }
-    
-    // Fetch all users
-    const users = await fetchUsers(token);
-    
-    // Transform to stored format
-    const storedUsers: StoredUser[] = users.map((user: any) => ({
-      id: user.id,
-      name: user.name || '',
-      display_name: user.profile?.display_name || '',
-      real_name: user.profile?.real_name || '',
-      email: user.profile?.email || '',
-      is_bot: user.is_bot || false,
-      is_deleted: user.deleted || false,
-      profile_image: user.profile?.image_72 || '',
-      timezone: user.tz || '',
-      updated_at: Date.now()
-    }));
-    
-    // Store users
-    await dbService.storeUsers(storedUsers);
-    
-    res.send(`Successfully refreshed ${storedUsers.length} users`);
-  } catch (error) {
-    res.status(500).send(`Error refreshing users: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    res.status(500).send(`Error refreshing Slack data: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 });
 
