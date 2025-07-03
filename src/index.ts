@@ -2,6 +2,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -12,7 +13,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import cors from 'cors';
-import { fetchChannels, fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage } from './slack.js';
+import { fetchChannels, fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage, fetchUsers, fetchChannelsWithMembers } from './slack.js';
+import { dbService, StoredChannel, StoredUser, ChannelMembership } from './database.js';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -54,28 +56,60 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_slack_channels',
-        description: 'Get list of Slack channels with rich information including members',
+        description: 'Get list of Slack channels from local storage (fast). Use refresh_channel_data first if data might be stale.',
         inputSchema: {
           type: 'object',
-          properties: {
-            token: {
-              type: 'string',
-              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
-            }
-          },
+          properties: {},
           required: []
         }
       },
       {
-        name: 'get_channel_messages',
-        description: 'Get latest messages from a Slack channel with nested thread replies (limited to 15 due to API restrictions)',
+        name: 'refresh_channel_data',
+        description: 'Refresh channel data from Slack API and store locally. Fetches channels, users, and memberships.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
+      {
+        name: 'refresh_user_data',
+        description: 'Refresh user data from Slack API and store locally. Updates user profiles and information.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
+      {
+        name: 'get_slack_users',
+        description: 'Get list of Slack users from local storage with names, display names, and profile info.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
+      {
+        name: 'get_channel_members',
+        description: 'Get detailed member list for a specific channel from local storage.',
         inputSchema: {
           type: 'object',
           properties: {
-            token: {
+            channel_id: {
               type: 'string',
-              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
-            },
+              description: 'Channel ID to get members for'
+            }
+          },
+          required: ['channel_id']
+        }
+      },
+      {
+        name: 'get_channel_messages',
+        description: 'Get latest messages from a Slack channel with nested thread replies. Uses SLACK_BOT_TOKEN from environment.',
+        inputSchema: {
+          type: 'object',
+          properties: {
             channel: {
               type: 'string',
               description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
@@ -86,14 +120,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_thread_replies',
-        description: 'Get all replies to a specific message thread in a Slack channel',
+        description: 'Get all replies to a specific message thread. Uses SLACK_BOT_TOKEN from environment.',
         inputSchema: {
           type: 'object',
           properties: {
-            token: {
-              type: 'string',
-              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
-            },
             channel: {
               type: 'string',
               description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
@@ -113,14 +143,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'send_slack_message',
-        description: 'Send a message to a Slack channel with advanced options for threading and formatting',
+        description: 'Send a message to a Slack channel. Uses SLACK_BOT_TOKEN from environment.',
         inputSchema: {
           type: 'object',
           properties: {
-            token: {
-              type: 'string',
-              description: 'Slack Bot Token (xoxb-...). If not provided, will use SLACK_BOT_TOKEN environment variable.'
-            },
             channel: {
               type: 'string',
               description: 'Channel ID (e.g., C1234567890). If not provided, will use SLACK_DEFAULT_CHANNEL environment variable.'
@@ -157,290 +183,201 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  console.log('Tools/call request:', request.params);
   const { name, arguments: args } = request.params;
 
-  // Helper function to get token and channel with environment variable fallbacks
+  // Helper function to get token and channel from environment variables
   const getTokenAndChannel = (args: any) => {
-    const token = (args as any).token || process.env.SLACK_BOT_TOKEN;
-    const channel = (args as any).channel || process.env.SLACK_DEFAULT_CHANNEL;
+    const token = process.env.SLACK_BOT_TOKEN;
+    const channel = args.channel || process.env.SLACK_DEFAULT_CHANNEL;
     
     if (!token) {
-      throw new Error('Slack bot token is required. Provide it as a parameter or set SLACK_BOT_TOKEN environment variable.');
+      throw new Error('SLACK_BOT_TOKEN environment variable is required.');
     }
     
     return { token, channel };
   };
 
-  switch (name) {
-    case 'get_slack_channels':
-      try {
-        const { token } = getTokenAndChannel(args);
-        const channels = await fetchChannels(token);
-
-        if (!channels || channels.length === 0) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'No channels found or unable to access channels with the provided token'
-              }
-            ]
-          };
-        }
-
-        const formattedChannels = channels.map((channel: any) => {
-          const details = [
-            `${channel.type === 'im' ? '@' : '#'}${channel.name} (${channel.id})`,
-            channel.type === 'im' ? 'Direct Message' : (channel.is_private ? "Private" : "Public"),
-            channel.is_archived ? "Archived" : "Active",
-            channel.num_members ? `${channel.num_members} members` : "",
-            channel.topic ? `Topic: ${channel.topic}` : "",
-            channel.purpose ? `Purpose: ${channel.purpose}` : ""
-          ].filter(Boolean).join(" | ");
-          
-          let membersList = "";
-          if (channel.members && channel.members.length > 0) {
-            const activeMembers = channel.members.filter((m: any) => !m.is_deleted);
-            if (activeMembers.length > 0) {
-              membersList = `\n  Members: ${activeMembers.map((m: any) => m.name).join(", ")}`;
-            }
-          }
-          
-          return details + membersList;
-        });
-
-        const channelsText = `Found ${channels.length} accessible channels:\n\n${formattedChannels.join("\n\n")}`;
-
+  try {
+    switch (name) {
+      case 'get_slack_channels': {
+        const channels = await dbService.getChannels();
         return {
           content: [
             {
               type: 'text',
-              text: channelsText
-            }
-          ]
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to retrieve channels: ${error instanceof Error ? error.message : "Unknown error"}`
+              text: JSON.stringify(channels, null, 2)
             }
           ]
         };
       }
 
-    case 'get_channel_messages':
-      try {
-        const { token, channel } = getTokenAndChannel(args);
+      case 'refresh_channel_data': {
+        const { token } = getTokenAndChannel({});
         
-        if (!channel) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Channel ID is required. Provide it as a parameter or set SLACK_DEFAULT_CHANNEL environment variable.'
-              }
-            ]
-          };
-        }
-
-        const messages = await fetchLatestMessagesFromChannel(token, channel);
-
-        if (!messages || messages.length === 0) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `No messages found in channel ${channel}`
-              }
-            ]
-          };
-        }
-
-        const formattedMessages = messages.map((msg: any) => {
-          const timestamp = new Date(parseFloat(msg.ts) * 1000).toLocaleString();
-          const threadInfo = msg.is_thread_parent ? ` (${msg.thread_replies?.length || 0} replies)` : "";
-          
-          let messageText = [
-            `[${timestamp}] User: ${msg.user || "Unknown"}${threadInfo}`,
-            `Message: ${msg.text}`,
-            msg.reactions?.length ? `Reactions: ${msg.reactions.map((r: any) => `${r.name} (${r.count})`).join(", ")}` : ""
-          ].filter(Boolean).join("\n");
-          
-          // Add nested thread replies
-          if (msg.thread_replies && msg.thread_replies.length > 0) {
-            const replies = msg.thread_replies.map((reply: any) => {
-              const replyTimestamp = new Date(parseFloat(reply.ts) * 1000).toLocaleString();
-              return [
-                `  ↳ [${replyTimestamp}] ${reply.user || "Unknown"}:`,
-                `    ${reply.text}`,
-                reply.reactions?.length ? `    Reactions: ${reply.reactions.map((r: any) => `${r.name} (${r.count})`).join(", ")}` : ""
-              ].filter(Boolean).join("\n");
-            });
-            messageText += "\n" + replies.join("\n");
-          }
-          
-          return messageText + "\n---";
-        });
-
-        const totalThreadReplies = messages.reduce((sum: number, msg: any) => sum + (msg.thread_replies?.length || 0), 0);
-        const messagesText = `Latest ${messages.length} messages from channel ${channel} with ${totalThreadReplies} thread replies:\n\n${formattedMessages.join("\n")}`;
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: messagesText
+        // Fetch channels with member IDs
+        const channels = await fetchChannelsWithMembers(token);
+        
+        // Transform to stored format
+        const storedChannels: StoredChannel[] = channels.map((channel: any) => ({
+          id: channel.id,
+          name: channel.name || '',
+          type: channel.type || 'channel',
+          is_private: channel.is_private || false,
+          is_archived: channel.is_archived || false,
+          topic: channel.topic?.value || '',
+          purpose: channel.purpose?.value || '',
+          num_members: channel.num_members || channel.member_ids?.length || 0,
+          created: channel.created || Date.now() / 1000,
+          updated_at: Date.now()
+        }));
+        
+        // Store channels
+        await dbService.storeChannels(storedChannels);
+        
+        // Create memberships
+        const memberships: ChannelMembership[] = [];
+        for (const channel of channels) {
+          if (channel.member_ids) {
+            for (const userId of channel.member_ids) {
+              memberships.push({
+                channel_id: channel.id,
+                user_id: userId,
+                added_at: Date.now()
+              });
             }
-          ]
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to retrieve messages: ${error instanceof Error ? error.message : "Unknown error"}`
-            }
-          ]
-        };
-      }
-
-    case 'get_thread_replies':
-      try {
-        const { token, channel } = getTokenAndChannel(args);
-        
-        if (!channel) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Channel ID is required. Provide it as a parameter or set SLACK_DEFAULT_CHANNEL environment variable.'
-              }
-            ]
-          };
-        }
-
-        const messages = await fetchThreadReplies(token, channel, (args as any).thread_ts, (args as any).limit || 50);
-
-        if (!messages || messages.length <= 1) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `No replies found for thread ${(args as any).thread_ts} in channel ${channel}`
-              }
-            ]
-          };
-        }
-
-        // Skip the first message (parent) and format replies
-        const replies = messages.slice(1);
-        
-        const formattedReplies = replies.map((msg: any) => {
-          const timestamp = new Date(parseFloat(msg.ts) * 1000).toLocaleString();
-          
-          return [
-            `[${timestamp}] User: ${msg.user || "Unknown"}`,
-            `Reply: ${msg.text}`,
-            msg.reactions?.length ? `Reactions: ${msg.reactions.map((r: any) => `${r.name} (${r.count})`).join(", ")}` : "",
-            "---"
-          ].filter(Boolean).join("\n");
-        });
-
-        const parentMsg = messages[0];
-        const parentTimestamp = new Date(parseFloat(parentMsg.ts) * 1000).toLocaleString();
-        
-        const threadText = [
-          `Thread for message ${(args as any).thread_ts} in #${parentMsg.conversation_name}:`,
-          "",
-          `Original message [${parentTimestamp}] by ${parentMsg.user || "Unknown"}:`,
-          parentMsg.text,
-          "",
-          `${replies.length} replies:`,
-          "",
-          formattedReplies.join("\n")
-        ].join("\n");
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: threadText
-            }
-          ]
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to retrieve thread replies: ${error instanceof Error ? error.message : "Unknown error"}`
-            }
-          ]
-        };
-      }
-
-    case 'send_slack_message':
-      try {
-        const { token, channel } = getTokenAndChannel(args);
-        
-        if (!channel) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Channel ID is required. Provide it as a parameter or set SLACK_DEFAULT_CHANNEL environment variable.'
-              }
-            ]
-          };
-        }
-
-        const options: any = {};
-        
-        if ((args as any).thread_ts) {
-          options.thread_ts = (args as any).thread_ts;
-          if ((args as any).reply_broadcast) {
-            options.reply_broadcast = true;
           }
         }
         
-        if ((args as any).unfurl_links !== undefined) {
-          options.unfurl_links = (args as any).unfurl_links;
-        }
-        
-        if ((args as any).unfurl_media !== undefined) {
-          options.unfurl_media = (args as any).unfurl_media;
-        }
-
-        const result = await sendMessage(token, channel, (args as any).text, options);
-        
-        const timestamp = new Date(parseFloat(result.ts || '0') * 1000).toLocaleString();
-        const threadInfo = (args as any).thread_ts ? " (as thread reply)" : "";
-        const broadcastInfo = (args as any).thread_ts && (args as any).reply_broadcast ? " (broadcasted to channel)" : "";
+        // Store memberships
+        await dbService.storeChannelMemberships(memberships);
         
         return {
           content: [
             {
               type: 'text',
-              text: `Message sent successfully${threadInfo}${broadcastInfo}!\n\nChannel: ${channel}\nTimestamp: ${result.ts} (${timestamp})\nMessage: ${(args as any).text}`
-            }
-          ]
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to send message: ${error instanceof Error ? error.message : "Unknown error"}`
+              text: `Successfully refreshed ${storedChannels.length} channels and ${memberships.length} memberships`
             }
           ]
         };
       }
 
-    default:
-      throw new Error(`Unknown tool: ${name}`);
+      case 'refresh_user_data': {
+        const { token } = getTokenAndChannel({});
+        
+        // Fetch all users
+        const users = await fetchUsers(token);
+        
+        // Transform to stored format
+        const storedUsers: StoredUser[] = users.map((user: any) => ({
+          id: user.id,
+          name: user.name || '',
+          display_name: user.profile?.display_name || '',
+          real_name: user.profile?.real_name || '',
+          email: user.profile?.email || '',
+          is_bot: user.is_bot || false,
+          is_deleted: user.deleted || false,
+          profile_image: user.profile?.image_72 || '',
+          timezone: user.tz || '',
+          updated_at: Date.now()
+        }));
+        
+        // Store users
+        await dbService.storeUsers(storedUsers);
+        
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Successfully refreshed ${storedUsers.length} users`
+            }
+          ]
+        };
+      }
+
+      case 'get_slack_users': {
+        const users = await dbService.getUsers();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(users, null, 2)
+            }
+          ]
+        };
+      }
+
+      case 'get_channel_members': {
+        const { channel_id } = args as any;
+        const members = await dbService.getChannelMembers(channel_id);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(members, null, 2)
+            }
+          ]
+        };
+      }
+
+      case 'get_channel_messages': {
+        const { token, channel } = getTokenAndChannel(args);
+        const result = await fetchLatestMessagesFromChannel(token, channel);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        };
+      }
+
+      case 'get_thread_replies': {
+        const { token, channel } = getTokenAndChannel(args);
+        const { thread_ts, limit = 50 } = args as any;
+        const result = await fetchThreadReplies(token, channel, thread_ts, limit);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        };
+      }
+
+      case 'send_slack_message': {
+        const { token, channel } = getTokenAndChannel(args);
+        const { text, thread_ts, reply_broadcast, unfurl_links, unfurl_media } = args as any;
+        const result = await sendMessage(token, channel, text, {
+          thread_ts,
+          reply_broadcast,
+          unfurl_links,
+          unfurl_media
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        };
+      }
+
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ],
+      isError: true
+    };
   }
 });
 
@@ -828,19 +765,279 @@ app.get('/health', (req, res) => {
 
 // Homepage
 app.get('/', (req, res) => {
-  res.json({
-    name: 'Slack MCP Server',
-    version: '1.0.0',
-    description: 'Enterprise-grade MCP server for Slack integration',
-    endpoints: {
-      health: '/health',
-      mcp: '/mcp'
-    },
-    capabilities: ['tools', 'resources', 'prompts'],
-    tools: ['get_slack_channels', 'get_channel_messages', 'get_thread_replies', 'send_slack_message'],
-    resources: ['slack://api-documentation', 'slack://rate-limits', 'slack://message-formatting'],
-    prompts: ['slack_team_standup', 'slack_incident_response', 'slack_project_kickoff']
-  });
+  const currentToken = process.env.SLACK_BOT_TOKEN ? 'Set' : 'Not Set';
+  const currentChannel = process.env.SLACK_DEFAULT_CHANNEL || 'Not Set';
+  
+  res.setHeader('Content-Type', 'text/html');
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Slack MCP Server Configuration</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { 
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+                max-width: 800px; 
+                margin: 40px auto; 
+                padding: 20px; 
+                background: #f8f9fa; 
+            }
+            .container { 
+                background: white; 
+                padding: 30px; 
+                border-radius: 8px; 
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            }
+            h1 { color: #333; margin-bottom: 30px; }
+            .status { 
+                background: #e3f2fd; 
+                padding: 15px; 
+                border-radius: 6px; 
+                margin-bottom: 25px; 
+                border-left: 4px solid #2196f3; 
+            }
+            .form-group { margin-bottom: 20px; }
+            label { 
+                display: block; 
+                margin-bottom: 8px; 
+                font-weight: 600; 
+                color: #555; 
+            }
+            input[type="text"], input[type="password"] { 
+                width: 100%; 
+                padding: 12px; 
+                border: 2px solid #ddd; 
+                border-radius: 6px; 
+                font-size: 14px; 
+                box-sizing: border-box;
+            }
+            input:focus { 
+                outline: none; 
+                border-color: #4CAF50; 
+            }
+            button { 
+                background: #4CAF50; 
+                color: white; 
+                padding: 12px 24px; 
+                border: none; 
+                border-radius: 6px; 
+                cursor: pointer; 
+                font-size: 16px; 
+                margin-right: 10px; 
+            }
+            button:hover { background: #45a049; }
+            .refresh-btn { background: #2196F3; }
+            .refresh-btn:hover { background: #1976D2; }
+            .help-text { 
+                font-size: 12px; 
+                color: #666; 
+                margin-top: 5px; 
+            }
+            .success { 
+                background: #d4edda; 
+                color: #155724; 
+                padding: 10px; 
+                border-radius: 4px; 
+                margin: 10px 0; 
+            }
+            .error { 
+                background: #f8d7da; 
+                color: #721c24; 
+                padding: 10px; 
+                border-radius: 4px; 
+                margin: 10px 0; 
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔧 Slack MCP Server Configuration</h1>
+            
+            <div class="status">
+                <h3>Current Status</h3>
+                <p><strong>Slack Bot Token:</strong> ${currentToken}</p>
+                <p><strong>Default Channel:</strong> ${currentChannel}</p>
+                <p><strong>MCP Endpoint:</strong> <code>${req.get('host')}/mcp</code></p>
+            </div>
+
+            <form action="/configure" method="post" style="margin-bottom: 20px;">
+                <div class="form-group">
+                    <label for="token">Slack Bot Token (xoxb-...)</label>
+                    <input type="password" id="token" name="token" placeholder="Enter your Slack bot token">
+                    <div class="help-text">
+                        Get this from your Slack app's OAuth & Permissions page. Required scopes: 
+                        channels:read, channels:history, chat:write, users:read
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="channel">Default Channel ID (optional)</label>
+                    <input type="text" id="channel" name="channel" placeholder="C1234567890" value="${currentChannel !== 'Not Set' ? currentChannel : ''}">
+                    <div class="help-text">
+                        Optional default channel for operations. You can still specify channels in individual tool calls.
+                    </div>
+                </div>
+                
+                <button type="submit">💾 Save Configuration</button>
+            </form>
+
+            <div style="border-top: 1px solid #eee; padding-top: 20px;">
+                <h3>Data Management</h3>
+                <p>After configuring your token, refresh the local data cache:</p>
+                <button onclick="refreshData('channels')" class="refresh-btn">🔄 Refresh Channel Data</button>
+                <button onclick="refreshData('users')" class="refresh-btn">👥 Refresh User Data</button>
+            </div>
+
+            <div id="message"></div>
+        </div>
+
+        <script>
+            async function refreshData(type) {
+                const messageDiv = document.getElementById('message');
+                messageDiv.innerHTML = '<div class="status">Refreshing ' + type + ' data...</div>';
+                
+                try {
+                    const response = await fetch('/refresh/' + type, { method: 'POST' });
+                    const result = await response.text();
+                    
+                    if (response.ok) {
+                        messageDiv.innerHTML = '<div class="success">✅ ' + result + '</div>';
+                    } else {
+                        messageDiv.innerHTML = '<div class="error">❌ ' + result + '</div>';
+                    }
+                } catch (error) {
+                    messageDiv.innerHTML = '<div class="error">❌ Error: ' + error.message + '</div>';
+                }
+            }
+
+            // Handle form submission
+            const form = document.querySelector('form');
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const formData = new FormData(form);
+                const messageDiv = document.getElementById('message');
+                
+                try {
+                    const response = await fetch('/configure', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await response.text();
+                    
+                    if (response.ok) {
+                        messageDiv.innerHTML = '<div class="success">✅ ' + result + '</div>';
+                        setTimeout(() => location.reload(), 1500);
+                    } else {
+                        messageDiv.innerHTML = '<div class="error">❌ ' + result + '</div>';
+                    }
+                } catch (error) {
+                    messageDiv.innerHTML = '<div class="error">❌ Error: ' + error.message + '</div>';
+                }
+            });
+        </script>
+    </body>
+    </html>
+  `);
+});
+
+app.post('/configure', express.urlencoded({ extended: true }), (req, res) => {
+  const { token, channel } = req.body;
+  
+  if (!token || !token.startsWith('xoxb-')) {
+    return res.status(400).send('Valid Slack bot token is required (must start with xoxb-)');
+  }
+  
+  // Note: In production, you'd want to store these securely
+  // For now, we'll just indicate success but note they need to be set in environment
+  res.send(`Configuration received! Please set these environment variables:
+    SLACK_BOT_TOKEN=${token}
+    ${channel ? `SLACK_DEFAULT_CHANNEL=${channel}` : ''}
+    
+    Then restart the server for changes to take effect.`);
+});
+
+app.post('/refresh/channels', async (req, res) => {
+  try {
+    const token = process.env.SLACK_BOT_TOKEN;
+    if (!token) {
+      return res.status(400).send('SLACK_BOT_TOKEN environment variable not set');
+    }
+    
+    // Fetch channels with member IDs
+    const channels = await fetchChannelsWithMembers(token);
+    
+    // Transform to stored format
+    const storedChannels: StoredChannel[] = channels.map((channel: any) => ({
+      id: channel.id,
+      name: channel.name || '',
+      type: channel.type || 'channel',
+      is_private: channel.is_private || false,
+      is_archived: channel.is_archived || false,
+      topic: channel.topic?.value || '',
+      purpose: channel.purpose?.value || '',
+      num_members: channel.num_members || channel.member_ids?.length || 0,
+      created: channel.created || Date.now() / 1000,
+      updated_at: Date.now()
+    }));
+    
+    // Store channels
+    await dbService.storeChannels(storedChannels);
+    
+    // Create memberships
+    const memberships: ChannelMembership[] = [];
+    for (const channel of channels) {
+      if (channel.member_ids) {
+        for (const userId of channel.member_ids) {
+          memberships.push({
+            channel_id: channel.id,
+            user_id: userId,
+            added_at: Date.now()
+          });
+        }
+      }
+    }
+    
+    // Store memberships
+    await dbService.storeChannelMemberships(memberships);
+    
+    res.send(`Successfully refreshed ${storedChannels.length} channels and ${memberships.length} memberships`);
+  } catch (error) {
+    res.status(500).send(`Error refreshing channels: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+});
+
+app.post('/refresh/users', async (req, res) => {
+  try {
+    const token = process.env.SLACK_BOT_TOKEN;
+    if (!token) {
+      return res.status(400).send('SLACK_BOT_TOKEN environment variable not set');
+    }
+    
+    // Fetch all users
+    const users = await fetchUsers(token);
+    
+    // Transform to stored format
+    const storedUsers: StoredUser[] = users.map((user: any) => ({
+      id: user.id,
+      name: user.name || '',
+      display_name: user.profile?.display_name || '',
+      real_name: user.profile?.real_name || '',
+      email: user.profile?.email || '',
+      is_bot: user.is_bot || false,
+      is_deleted: user.deleted || false,
+      profile_image: user.profile?.image_72 || '',
+      timezone: user.tz || '',
+      updated_at: Date.now()
+    }));
+    
+    // Store users
+    await dbService.storeUsers(storedUsers);
+    
+    res.send(`Successfully refreshed ${storedUsers.length} users`);
+  } catch (error) {
+    res.status(500).send(`Error refreshing users: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 });
 
 // MCP endpoint using SDK transport

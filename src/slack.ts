@@ -288,4 +288,97 @@ export async function fetchLatestMessagesFromChannel(token: string, channelId: s
     console.error(`Error fetching messages for ${channelId}:`, error);
     throw error;
   }
+}
+
+// New function to fetch all users
+export async function fetchUsers(token: string) {
+  const web = new WebClient(token);
+  
+  try {
+    const result = await web.users.list({
+      limit: 1000 // Adjust as needed
+    });
+    
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error}`);
+    }
+    
+    return result.members || [];
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    throw error;
+  }
+}
+
+// New function to fetch user info by ID
+export async function fetchUserInfo(token: string, userId: string) {
+  const web = new WebClient(token);
+  
+  try {
+    const result = await web.users.info({
+      user: userId
+    });
+    
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error}`);
+    }
+    
+    return result.user;
+  } catch (error) {
+    console.error(`Error fetching user info for ${userId}:`, error);
+    throw error;
+  }
+}
+
+// Enhanced function to fetch channels with member details
+export async function fetchChannelsWithMembers(token: string) {
+  const web = new WebClient(token);
+  
+  try {
+    // Get all channels
+    const channelsResult = await web.conversations.list({
+      types: 'public_channel,private_channel',
+      limit: 1000
+    });
+    
+    if (!channelsResult.ok) {
+      throw new Error(`Slack API error: ${channelsResult.error}`);
+    }
+    
+    const channels = channelsResult.channels || [];
+    const channelsWithMembers = [];
+    
+    // For each channel, get its members
+    for (const channel of channels) {
+      try {
+        const membersResult = await web.conversations.members({
+          channel: channel.id
+        });
+        
+        if (membersResult.ok) {
+          channelsWithMembers.push({
+            ...channel,
+            member_ids: membersResult.members || []
+          });
+        } else {
+          // If we can't get members (e.g., private channel), still include the channel
+          channelsWithMembers.push({
+            ...channel,
+            member_ids: []
+          });
+        }
+      } catch (memberError) {
+        console.warn(`Could not fetch members for channel ${channel.id}:`, memberError);
+        channelsWithMembers.push({
+          ...channel,
+          member_ids: []
+        });
+      }
+    }
+    
+    return channelsWithMembers;
+  } catch (error) {
+    console.error('Error fetching channels with members:', error);
+    throw error;
+  }
 } 
