@@ -197,6 +197,67 @@ class DatabaseService {
     return await all('SELECT * FROM channels ORDER BY name');
   }
 
+  // Get channels with member information included
+  async getChannelsWithMembers(): Promise<any[]> {
+    await this.initialize();
+    
+    const all = promisify(this.db.all.bind(this.db));
+    
+    // Get channels with their members in one query
+    const result = await all(`
+      SELECT 
+        c.*,
+        GROUP_CONCAT(
+          json_object(
+            'id', u.id,
+            'name', u.name,
+            'real_name', u.real_name,
+            'display_name', u.display_name
+          )
+        ) as members_json
+      FROM channels c
+      LEFT JOIN channel_memberships cm ON c.id = cm.channel_id
+      LEFT JOIN users u ON cm.user_id = u.id AND u.is_deleted = 0
+      GROUP BY c.id
+      ORDER BY c.name
+    `);
+    
+    // Parse the JSON members for each channel
+    return result.map((row: any) => {
+      let members = [];
+      if (row.members_json) {
+        try {
+          // Split the GROUP_CONCAT result and parse each JSON object
+          const memberJsonStrings = row.members_json.split(',');
+          members = memberJsonStrings.map((jsonStr: string) => {
+            try {
+              return JSON.parse(jsonStr);
+            } catch {
+              return null;
+            }
+          }).filter(Boolean);
+        } catch (error) {
+          console.error('Error parsing members JSON:', error);
+          members = [];
+        }
+      }
+      
+      return {
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        is_private: row.is_private,
+        is_archived: row.is_archived,
+        topic: row.topic,
+        purpose: row.purpose,
+        num_members: row.num_members,
+        created: row.created,
+        updated_at: row.updated_at,
+        members: members
+      };
+    });
+  }
+
   async getUsers(): Promise<StoredUser[]> {
     await this.initialize();
     
@@ -227,6 +288,8 @@ class DatabaseService {
       ORDER BY c.name
     `, [userId]);
   }
+
+
 }
 
 export const dbService = new DatabaseService(); 

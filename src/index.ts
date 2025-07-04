@@ -2,7 +2,6 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -13,11 +12,18 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import cors from 'cors';
-import { fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage, fetchChannelsWithMembers, refreshAllSlackData } from './slack.js';
+import { fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage, refreshAllSlackData } from './slack.js';
 import { dbService, StoredChannel, StoredUser, ChannelMembership } from './database.js';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// Improve connection handling
+app.use((req, res, next) => {
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Keep-Alive', 'timeout=30, max=100');
+  next();
+});
 
 // Enable CORS and JSON parsing
 app.use(cors({
@@ -55,8 +61,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
+        name: 'ping',
+        description: 'Simple connectivity test that responds immediately. Use this to verify MCP connection is working.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
+      {
         name: 'get_slack_channels',
-        description: 'Retrieve all Slack channels/conversations from local storage including regular channels, private channels, DMs, and group DMs. Returns cached data for fast access. Each channel includes ID, name, type, privacy status, member count, topic, and purpose. Use refresh_all_slack_data first if you need current data from Slack.',
+        description: 'Retrieve all Slack channels/conversations from local storage including regular channels, private channels, DMs, and group DMs. Returns cached data for fast access. Each channel includes ID, name, type, privacy status, member count, topic, purpose, and all members (with their ID, name, real_name, display_name). Use refresh_all_slack_data first if you need current data from Slack.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -134,13 +149,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'send_slack_message',
-        description: 'Send a message to a Slack channel with optional threading and formatting options. Supports replies to existing threads, broadcasting thread replies to main channel, and controlling link/media unfurling. Uses Slack chat.postMessage API.',
+        description: 'Send a message to a Slack channel or direct message to a user. Supports both channel IDs (C1234567890) and user IDs (U1234567890) for direct messages. Includes optional threading and formatting options.',
         inputSchema: {
           type: 'object',
           properties: {
             channel: {
               type: 'string',
-              description: 'Slack channel ID to send message to. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable. Find channel IDs using get_slack_channels.'
+              description: 'Slack channel ID (C1234567890) OR user ID (U1234567890) for direct message. If user ID provided, will automatically open/find DM channel. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable. Find IDs using get_slack_channels or get_slack_users.'
             },
             text: {
               type: 'string',
@@ -169,6 +184,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['text']
         }
       },
+
     ]
   };
 });
@@ -188,172 +204,235 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { token, channel };
   };
 
-  try {
-    switch (name) {
-      case 'get_slack_channels': {
-        const channels = await dbService.getChannels();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(channels, null, 2)
-            }
-          ]
-        };
-      }
+  // Timeout wrapper to prevent hanging
+  const executeWithTimeout = async (operation: () => Promise<any>, timeoutMs = 30000) => {
+    return Promise.race([
+      operation(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Operation timed out after 30 seconds')), timeoutMs)
+      )
+    ]);
+  };
 
-      case 'refresh_all_slack_data': {
-        const { token } = getTokenAndChannel({});
-        
-        // Use the unified refresh function
-        const result = await refreshAllSlackData(token);
-        
-        // Transform conversations to stored channel format
-        const storedChannels: StoredChannel[] = result.conversations.map((channel: any) => ({
-          id: channel.id,
-          name: channel.name || '',
-          type: channel.type || 'channel',
-          is_private: channel.is_private || false,
-          is_archived: channel.is_archived || false,
-          topic: channel.topic?.value || '',
-          purpose: channel.purpose?.value || '',
-          num_members: channel.num_members || channel.member_ids?.length || 0,
-          created: channel.created || Date.now() / 1000,
-          updated_at: Date.now()
-        }));
-        
-        // Transform users to stored format
-        const storedUsers: StoredUser[] = result.users.map((user: any) => ({
-          id: user.id,
-          name: user.name || '',
-          display_name: user.display_name || '',
-          real_name: user.real_name || '',
-          email: user.email || '',
-          is_bot: user.is_bot || false,
-          is_deleted: user.is_deleted || false,
-          is_restricted: user.is_restricted || false,
-          is_ultra_restricted: user.is_ultra_restricted || false,
-          is_stranger: false, // Not available in Slack API
-          is_app_user: user.is_app_user || false,
-          is_external: false, // Not available in Slack API
-          is_admin: user.is_admin || false,
-          is_owner: user.is_owner || false,
-          profile_image: user.profile_image || '',
-          timezone: user.timezone || '',
-          locale: user.locale || '',
-          team_id: user.team_id || '',
-          updated_at: user.updated_at || Date.now()
-        }));
-        
-        // Create memberships
-        const memberships: ChannelMembership[] = [];
-        for (const channel of result.conversations) {
-          if (channel.member_ids) {
-            for (const userId of channel.member_ids) {
-              memberships.push({
-                channel_id: channel.id,
-                user_id: userId,
-                added_at: Date.now()
-              });
+  try {
+    console.log(`MCP Tool called: ${name}`, JSON.stringify(args));
+    
+    const result = await executeWithTimeout(async () => {
+      switch (name) {
+        case 'ping': {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Pong!'
+              }
+            ]
+          };
+        }
+
+        case 'get_slack_channels': {
+          const channelsWithMembers = await dbService.getChannelsWithMembers();
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(channelsWithMembers, null, 2)
+              }
+            ]
+          };
+        }
+
+        case 'refresh_all_slack_data': {
+          const { token } = getTokenAndChannel({});
+          
+          console.log('Starting refresh_all_slack_data...');
+          
+          // Use the unified refresh function
+          const result = await refreshAllSlackData(token);
+          
+          console.log('Data fetched, storing to database...');
+          
+          // Transform conversations to stored channel format
+          const storedChannels: StoredChannel[] = result.conversations.map((channel: any) => ({
+            id: channel.id,
+            name: channel.name || '',
+            type: channel.type || 'channel',
+            is_private: channel.is_private || false,
+            is_archived: channel.is_archived || false,
+            topic: channel.topic?.value || '',
+            purpose: channel.purpose?.value || '',
+            num_members: channel.num_members || channel.member_ids?.length || 0,
+            created: channel.created || Date.now() / 1000,
+            updated_at: Date.now()
+          }));
+          
+          // Transform users to stored format
+          const storedUsers: StoredUser[] = result.users.map((user: any) => ({
+            id: user.id,
+            name: user.name || '',
+            display_name: user.display_name || '',
+            real_name: user.real_name || '',
+            email: user.email || '',
+            is_bot: user.is_bot || false,
+            is_deleted: user.is_deleted || false,
+            is_restricted: user.is_restricted || false,
+            is_ultra_restricted: user.is_ultra_restricted || false,
+            is_stranger: false, // Not available in Slack API
+            is_app_user: user.is_app_user || false,
+            is_external: false, // Not available in Slack API
+            is_admin: user.is_admin || false,
+            is_owner: user.is_owner || false,
+            profile_image: user.profile_image || '',
+            timezone: user.timezone || '',
+            locale: user.locale || '',
+            team_id: user.team_id || '',
+            updated_at: user.updated_at || Date.now()
+          }));
+          
+          // Create memberships
+          const memberships: ChannelMembership[] = [];
+          for (const channel of result.conversations) {
+            if (channel.member_ids) {
+              for (const userId of channel.member_ids) {
+                memberships.push({
+                  channel_id: channel.id,
+                  user_id: userId,
+                  added_at: Date.now()
+                });
+              }
             }
           }
-        }
-        
-        // Store everything in parallel
-        await Promise.all([
-          dbService.storeChannels(storedChannels),
-          dbService.storeUsers(storedUsers),
-          dbService.storeChannelMemberships(memberships)
-        ]);
-        
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Successfully refreshed all Slack data:
+          
+          // Store everything in parallel
+          await Promise.all([
+            dbService.storeChannels(storedChannels),
+            dbService.storeUsers(storedUsers),
+            dbService.storeChannelMemberships(memberships)
+          ]);
+          
+          console.log('Database storage complete');
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Successfully refreshed all Slack data:
               - ${storedChannels.length} conversations (channels/DMs)
               - ${storedUsers.length} unique users
               - ${memberships.length} memberships`
-            }
-          ]
-        };
-      }
+              }
+            ]
+          };
+        }
 
-      case 'get_slack_users': {
-        const users = await dbService.getUsers();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(users, null, 2)
-            }
-          ]
-        };
-      }
+        case 'get_slack_users': {
+          const users = await dbService.getUsers();
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(users, null, 2)
+              }
+            ]
+          };
+        }
 
-      case 'get_channel_members': {
-        const { channel_id } = args as any;
-        const members = await dbService.getChannelMembers(channel_id);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(members, null, 2)
-            }
-          ]
-        };
-      }
+        case 'get_channel_members': {
+          const { channel_id } = args as any;
+          const members = await dbService.getChannelMembers(channel_id);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(members, null, 2)
+              }
+            ]
+          };
+        }
 
-      case 'get_channel_messages': {
-        const { token, channel } = getTokenAndChannel(args);
-        const result = await fetchLatestMessagesFromChannel(token, channel);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      }
+        case 'get_channel_messages': {
+          const { token, channel } = getTokenAndChannel(args);
+          console.log(`Fetching messages from channel: ${channel}`);
+          const result = await fetchLatestMessagesFromChannel(token, channel);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        }
 
-      case 'get_thread_replies': {
-        const { token, channel } = getTokenAndChannel(args);
-        const { thread_ts, limit = 50 } = args as any;
-        const result = await fetchThreadReplies(token, channel, thread_ts, limit);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      }
+        case 'get_thread_replies': {
+          const { token, channel } = getTokenAndChannel(args);
+          const { thread_ts, limit = 50 } = args as any;
+          console.log(`Fetching thread replies from ${channel}, thread: ${thread_ts}`);
+          const result = await fetchThreadReplies(token, channel, thread_ts, limit);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        }
 
-      case 'send_slack_message': {
-        const { token, channel } = getTokenAndChannel(args);
-        const { text, thread_ts, reply_broadcast, unfurl_links, unfurl_media } = args as any;
-        const result = await sendMessage(token, channel, text, {
-          thread_ts,
-          reply_broadcast,
-          unfurl_links,
-          unfurl_media
-        });
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2)
+        case 'send_slack_message': {
+          const { token, channel } = getTokenAndChannel(args);
+          const { text, thread_ts, reply_broadcast, unfurl_links, unfurl_media } = args as any;
+          
+          console.log(`Sending message to: ${channel}`);
+          
+          let targetChannel = channel;
+          
+          // Check if the channel looks like a user ID (starts with U)
+          if (channel && channel.startsWith('U')) {
+            console.log('User ID detected, finding DM channel...');
+            // It's a user ID, find the DM channel from our stored data
+            const channelsWithMembers = await dbService.getChannelsWithMembers();
+            const dmChannel = channelsWithMembers.find(c => 
+              c.type === 'im' && c.members.some(m => m.id === channel)
+            );
+            
+            if (!dmChannel) {
+              throw new Error(`No DM channel found with user ${channel}. Try running refresh_all_slack_data first, or use the actual DM channel ID.`);
             }
-          ]
-        };
-      }
+            
+            targetChannel = dmChannel.id;
+            console.log(`Found DM channel: ${targetChannel}`);
+          }
+          
+          const result = await sendMessage(token, targetChannel, text, {
+            thread_ts,
+            reply_broadcast,
+            unfurl_links,
+            unfurl_media
+          });
+          
+          console.log('Message sent successfully');
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        }
 
-      default:
-        throw new Error(`Unknown tool: ${name}`);
-    }
+        default:
+          throw new Error(`Unknown tool: ${name}`);
+      }
+    });
+
+    console.log(`MCP Tool completed: ${name}`);
+    return result;
+
   } catch (error) {
+    console.error(`MCP Tool error for ${name}:`, error);
     return {
       content: [
         {
@@ -892,16 +971,38 @@ app.get('/', (req, res) => {
   `);
 });
 
-
+// Connection monitoring middleware
+app.use('/mcp', (req, res, next) => {
+  const startTime = Date.now();
+  const connectionId = `${req.ip}-${startTime}`;
+  
+  console.log(`[${connectionId}] MCP Connection started from ${req.ip}`);
+  
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    console.log(`[${connectionId}] MCP Connection finished in ${duration}ms`);
+  });
+  
+  res.on('close', () => {
+    const duration = Date.now() - startTime;
+    console.log(`[${connectionId}] MCP Connection closed after ${duration}ms`);
+  });
+  
+  next();
+});
 
 // MCP endpoint using SDK transport
 app.post('/mcp', async (req, res) => {
   console.log('MCP request received:', req.method, req.url);
   console.log('Headers:', req.headers);
   
+  // Set timeouts
+  req.setTimeout(25000); // 25 second request timeout
+  res.setTimeout(25000); // 25 second response timeout
+  
   try {
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined, // Stateless mode for simplicity
+      sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     });
     
     await server.connect(transport);
@@ -910,13 +1011,26 @@ app.post('/mcp', async (req, res) => {
     res.on('close', () => {
       server.close();
     });
+    
+    res.on('error', (error) => {
+      console.error('Response error:', error);
+    });
+    
   } catch (error) {
     console.error('MCP transport error:', error);
-    res.status(500).json({
-      jsonrpc: '2.0',
-      error: { code: -32603, message: 'Internal error' },
-      id: null
-    });
+    
+    // Send proper JSON-RPC error response
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: '2.0',
+        error: { 
+          code: -32603, 
+          message: 'Internal server error',
+          data: error.message
+        },
+        id: null
+      });
+    }
   }
 });
 
