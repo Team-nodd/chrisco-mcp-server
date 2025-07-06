@@ -250,41 +250,50 @@ export async function fetchChannelsWithMembers(token: string, includeFullMemberD
     for (const conversation of allConversations) {
       try {
         if (conversation.is_im) {
-          // For DMs, we don't need to fetch members - it's just the other user
+          // For DMs, get the member list which includes both users in the conversation
+          const membersResult = await web.conversations.members({
+            channel: conversation.id
+          });
+          
+          const memberIds = membersResult.ok ? (membersResult.members || []) : [];
           let memberDetails = undefined;
           
-          // If full details requested, get user info for DM partner
-          if (includeFullMemberDetails && conversation.user) {
-            try {
-              const userInfo = await web.users.info({ user: conversation.user });
-              memberDetails = [{
-                id: conversation.user,
-                name: userInfo.user?.name || '',
-                display_name: userInfo.user?.profile?.display_name || '',
-                real_name: userInfo.user?.real_name || '',
-                email: userInfo.user?.profile?.email || '',
-                is_bot: userInfo.user?.is_bot || false,
-                is_deleted: userInfo.user?.deleted || false,
-                is_restricted: userInfo.user?.is_restricted || false,
-                is_ultra_restricted: userInfo.user?.is_ultra_restricted || false,
-                is_app_user: userInfo.user?.is_app_user || false,
-                is_admin: userInfo.user?.is_admin || false,
-                is_owner: userInfo.user?.is_owner || false,
-                profile_image: userInfo.user?.profile?.image_72 || '',
-                timezone: userInfo.user?.tz || '',
-                locale: userInfo.user?.locale || '',
-                team_id: userInfo.user?.team_id || '',
-                updated_at: Date.now()
-              }];
-            } catch (error) {
-              console.warn(`Could not fetch user details for ${conversation.user}:`, error);
-              memberDetails = [{ id: conversation.user, name: conversation.user, is_deleted: false }];
-            }
+          // If full details requested, get user info for each member
+          if (includeFullMemberDetails && memberIds.length > 0) {
+            memberDetails = await Promise.all(
+              memberIds.map(async (userId: string) => {
+                try {
+                  const userInfo = await web.users.info({ user: userId });
+                  return {
+                    id: userId,
+                    name: userInfo.user?.name || '',
+                    display_name: userInfo.user?.profile?.display_name || '',
+                    real_name: userInfo.user?.real_name || '',
+                    email: userInfo.user?.profile?.email || '',
+                    is_bot: userInfo.user?.is_bot || false,
+                    is_deleted: userInfo.user?.deleted || false,
+                    is_restricted: userInfo.user?.is_restricted || false,
+                    is_ultra_restricted: userInfo.user?.is_ultra_restricted || false,
+                    is_app_user: userInfo.user?.is_app_user || false,
+                    is_admin: userInfo.user?.is_admin || false,
+                    is_owner: userInfo.user?.is_owner || false,
+                    profile_image: userInfo.user?.profile?.image_72 || '',
+                    timezone: userInfo.user?.tz || '',
+                    locale: userInfo.user?.locale || '',
+                    team_id: userInfo.user?.team_id || '',
+                    updated_at: Date.now()
+                  };
+                } catch (error) {
+                  console.warn(`Could not fetch user details for ${userId}:`, error);
+                  return { id: userId, name: userId, is_deleted: false };
+                }
+              })
+            );
           }
           
           conversationsWithMembers.push({
             ...conversation,
-            member_ids: conversation.user ? [conversation.user] : [],
+            member_ids: memberIds,
             member_details: memberDetails,
             type: 'im'
           });
