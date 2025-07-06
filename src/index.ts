@@ -991,10 +991,33 @@ app.use('/mcp', (req, res, next) => {
   next();
 });
 
-// Create a single transport instance but don't connect yet
-const transport = new StreamableHTTPServerTransport({
-  sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-});
+// Create transport and connect server once
+let transport: StreamableHTTPServerTransport | null = null;
+let serverConnected = false;
+
+async function getConnectedTransport() {
+  if (!transport) {
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    });
+  }
+  
+  if (!serverConnected) {
+    try {
+      await server.connect(transport);
+      serverConnected = true;
+      console.log('MCP server connected to transport');
+    } catch (error) {
+      console.error('Failed to connect server to transport:', error);
+      // If connection fails, reset state
+      transport = null;
+      serverConnected = false;
+      throw error;
+    }
+  }
+  
+  return transport;
+}
 
 // MCP endpoint using SDK transport
 app.post('/mcp', async (req, res) => {
@@ -1006,14 +1029,8 @@ app.post('/mcp', async (req, res) => {
   res.setTimeout(25000); // 25 second response timeout
   
   try {
-    // Check if server is already connected to transport
-    if (!(server as any)._transport) {
-      // Connect server to transport only if not already connected
-      await server.connect(transport);
-      console.log('Server connected to transport');
-    }
-    
-    await transport.handleRequest(req, res, req.body);
+    const connectedTransport = await getConnectedTransport();
+    await connectedTransport.handleRequest(req, res, req.body);
     
     res.on('error', (error) => {
       console.error('Response error:', error);
