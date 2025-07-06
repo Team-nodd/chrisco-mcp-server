@@ -9,6 +9,7 @@ import {
   ReadResourceRequestSchema,
   GetPromptRequestSchema,
   ListPromptsRequestSchema,
+  InitializeRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import cors from 'cors';
@@ -54,6 +55,30 @@ const server = new Server(
     },
   }
 );
+
+// INITIALIZATION - Handle MCP initialization
+server.setRequestHandler(InitializeRequestSchema, async (request) => {
+  console.log('Initialize request received:', JSON.stringify(request));
+  return {
+    protocolVersion: '2024-11-05',
+    capabilities: {
+      tools: {
+        listChanged: false
+      },
+      resources: {
+        subscribe: false,
+        listChanged: false
+      },
+      prompts: {
+        listChanged: false
+      }
+    },
+    serverInfo: {
+      name: 'slack-mcp-server',
+      version: '1.0.0'
+    }
+  };
+});
 
 // TOOLS - Slack integration functions
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -1023,6 +1048,7 @@ async function getConnectedTransport() {
 app.post('/mcp', async (req, res) => {
   console.log('MCP request received:', req.method, req.url);
   console.log('Headers:', req.headers);
+  console.log('Body:', JSON.stringify(req.body));
   
   // Set timeouts
   req.setTimeout(25000); // 25 second request timeout
@@ -1030,7 +1056,14 @@ app.post('/mcp', async (req, res) => {
   
   try {
     const connectedTransport = await getConnectedTransport();
+    
+    // Log before handling request
+    console.log('Handling request with transport...');
+    
     await connectedTransport.handleRequest(req, res, req.body);
+    
+    // Log after handling request
+    console.log('Request handled successfully');
     
     res.on('error', (error) => {
       console.error('Response error:', error);
@@ -1038,6 +1071,7 @@ app.post('/mcp', async (req, res) => {
     
   } catch (error) {
     console.error('MCP transport error:', error);
+    console.error('Error stack:', error.stack);
     
     // Send proper JSON-RPC error response
     if (!res.headersSent) {
