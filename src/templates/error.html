@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Slack Authorization Error</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            max-width: 600px; 
+            margin: 60px auto; 
+            padding: 40px; 
+            background: #f8f9fa; 
+            text-align: center;
+        }
+        .container { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
+        }
+        h1 { 
+            color: #dc3545; 
+            margin-bottom: 20px; 
+        }
+        .error { 
+            color: #dc3545; 
+            font-size: 1.2em; 
+            margin-bottom: 30px; 
+        }
+        .error-box {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            color: #721c24;
+        }
+        .retry-btn { 
+            display: inline-block; 
+            padding: 12px 24px; 
+            background: #4A154B; 
+            color: #fff; 
+            border-radius: 6px; 
+            text-decoration: none; 
+            font-size: 16px; 
+            margin: 20px 0;
+        }
+        .retry-btn:hover { 
+            background: #611f69; 
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>❌ Authorization Error</h1>
+        <p class="error">{{ERROR_MESSAGE}}</p>
+        
+        <div class="error-box">
+            <h4>What went wrong?</h4>
+            <p>{{ERROR_DETAILS}}</p>
+        </div>
+        
+        <a href="/" class="retry-btn">🔄 Try Again</a>
+    </div>
+</body>
+</html> 

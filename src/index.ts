@@ -4,18 +4,14 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
-  ListResourcesRequestSchema,
   ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
   InitializeRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import cors from 'cors';
 import { fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage, refreshAllSlackData } from './slack.js';
-import { dbService, StoredChannel, StoredUser, ChannelMembership } from './database.js';
-import { v4 as uuidv4 } from 'uuid';
+import { dbService, StoredChannel, StoredUser, ChannelMembership, DMConversation } from './database.js';
+import { renderHomepage, renderSuccess, renderError, renderConfigError } from './templates.js';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -45,13 +41,6 @@ const server = new Server(
     capabilities: {
       tools: {
         listChanged: false
-      },
-      resources: {
-        subscribe: false,
-        listChanged: false
-      },
-      prompts: {
-        listChanged: false
       }
     },
   }
@@ -64,13 +53,6 @@ server.setRequestHandler(InitializeRequestSchema, async (request) => {
     protocolVersion: '2024-11-05',
     capabilities: {
       tools: {
-        listChanged: false
-      },
-      resources: {
-        subscribe: false,
-        listChanged: false
-      },
-      prompts: {
         listChanged: false
       }
     },
@@ -210,6 +192,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['text']
         }
       },
+      {
+        name: 'get_slack_dms',
+        description: 'Retrieve one-on-one DM conversations from local storage. Returns cached IM (direct message) data with user information, open status, and priority ordering. Use refresh_all_slack_data to update DM data.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
 
     ]
   };
@@ -218,16 +209,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
-  // Helper function to get token and channel from environment variables
-  const getTokenAndChannel = (args: any) => {
-    const token = process.env.SLACK_BOT_TOKEN;
+  // Helper function to get token and channel from database and environment variables
+  const getTokenAndChannel = async (args: any) => {
+    // Try to get token from database first
+    const dbToken = await dbService.getActiveToken();
+    let token = dbToken?.access_token;
+    
+    // Fall back to environment variable if no database token found
+    if (!token) {
+      token = process.env.SLACK_BOT_TOKEN;
+    }
+    
     const channel = args.channel || process.env.SLACK_DEFAULT_CHANNEL;
     
     if (!token) {
-      throw new Error('SLACK_BOT_TOKEN environment variable is required.');
+      throw new Error('No Slack token available. Please authorize via OAuth or set SLACK_BOT_TOKEN environment variable.');
     }
     
-    return { token, channel };
+    return { token, channel, tokenInfo: dbToken };
   };
 
   // Timeout wrapper to prevent hanging
@@ -269,7 +268,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         case 'refresh_all_slack_data': {
-          const { token } = getTokenAndChannel({});
+          const { token } = await getTokenAndChannel({});
           
           console.log('Starting refresh_all_slack_data...');
           
@@ -329,11 +328,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
           }
           
+          // Extract one-on-one DM conversations for dedicated DM storage
+          const dmConversations: DMConversation[] = result.conversations
+            .filter((channel: any) => channel.type === 'im') // Only one-on-one DMs
+            .map((dm: any) => {
+              // Find the other user (not the bot/current user)
+              let otherUser = null;
+              if (dm.member_ids && dm.member_ids.length === 2) {
+                // Find the user who is not the current user/bot
+                const currentUserId = result.users.find((u: any) => u.is_bot)?.id;
+                otherUser = result.users.find((u: any) => 
+                  dm.member_ids.includes(u.id) && u.id !== currentUserId
+                );
+              }
+              
+              // Set priority for specific DM (self-DM gets priority 100)
+              let priority = 0;
+              if (dm.id === 'D07EHJ1FCS0') {
+                priority = 100;
+              }
+              
+              return {
+                id: dm.id,
+                type: dm.type,
+                user_id: otherUser?.id || null,
+                user_name: otherUser?.display_name || otherUser?.real_name || otherUser?.name || null,
+                is_user_deleted: otherUser?.is_deleted || false,
+                created: dm.created || Date.now() / 1000,
+                updated_at: Date.now(),
+                latest_message_ts: dm.latest?.ts || null,
+                unread_count: dm.unread_count || 0,
+                is_open: dm.is_open !== false, // Default to true if not specified
+                priority: priority
+              };
+            });
+          
           // Store everything in parallel
           await Promise.all([
             dbService.storeChannels(storedChannels),
             dbService.storeUsers(storedUsers),
-            dbService.storeChannelMemberships(memberships)
+            dbService.storeChannelMemberships(memberships),
+            dbService.storeDMConversations(dmConversations)
           ]);
           
           console.log('Database storage complete');
@@ -345,7 +380,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 text: `Successfully refreshed all Slack data:
               - ${storedChannels.length} conversations (channels/DMs)
               - ${storedUsers.length} unique users
-              - ${memberships.length} memberships`
+              - ${memberships.length} memberships
+              - ${dmConversations.length} one-on-one DMs stored separately`
               }
             ]
           };
@@ -377,7 +413,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         case 'get_channel_messages': {
-          const { token, channel } = getTokenAndChannel(args);
+          const { token, channel } = await getTokenAndChannel(args);
           console.log(`Fetching messages from channel: ${channel}`);
           const result = await fetchLatestMessagesFromChannel(token, channel);
           return {
@@ -391,7 +427,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         case 'get_thread_replies': {
-          const { token, channel } = getTokenAndChannel(args);
+          const { token, channel } = await getTokenAndChannel(args);
           const { thread_ts, limit = 50 } = args as any;
           console.log(`Fetching thread replies from ${channel}, thread: ${thread_ts}`);
           const result = await fetchThreadReplies(token, channel, thread_ts, limit);
@@ -406,7 +442,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         case 'send_slack_message': {
-          const { token, channel } = getTokenAndChannel(args);
+          const { token, channel } = await getTokenAndChannel(args);
           const { text, thread_ts, reply_broadcast, unfurl_links, unfurl_media } = args as any;
           
           console.log(`Sending message to: ${channel}`);
@@ -449,6 +485,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        case 'get_slack_dms': {
+          // Only get one-on-one DMs (type 'im')
+          const dms = await dbService.getDMsByType('im');
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(dms, null, 2)
+              }
+            ]
+          };
+        }
+
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -469,552 +519,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true
     };
   }
-});
-
-// RESOURCES - Slack-related static information
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  console.log('Resources/list request');
-  return {
-    resources: [
-      {
-        uri: 'slack://api-documentation',
-        name: 'Slack API Documentation',
-        description: 'Comprehensive guide to Slack Web API endpoints and best practices',
-        mimeType: 'text/markdown'
-      },
-      {
-        uri: 'slack://rate-limits',
-        name: 'Slack API Rate Limits',
-        description: 'Current rate limiting information for Slack API calls',
-        mimeType: 'application/json'
-      },
-      {
-        uri: 'slack://message-formatting',
-        name: 'Slack Message Formatting Guide',
-        description: 'How to format messages, use blocks, and create rich content',
-        mimeType: 'text/markdown'
-      }
-    ]
-  };
-});
-
-server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-  console.log('Resources/read request:', request.params);
-  const { uri } = request.params;
-
-  switch (uri) {
-    case 'slack://api-documentation':
-      const apiDoc = `# Slack API Integration Guide
-
-## Available Endpoints
-This MCP server provides access to key Slack Web API functionality:
-
-### Conversations API
-- **conversations.list**: Get all channels accessible to the bot
-- **conversations.history**: Retrieve message history from channels
-- **conversations.replies**: Get thread replies for specific messages
-- **conversations.members**: List channel members
-
-### Chat API
-- **chat.postMessage**: Send messages to channels or threads
-
-### Users API
-- **users.info**: Get user profile information
-
-## Authentication
-All tools require a Slack Bot Token (xoxb-...) with appropriate scopes:
-- \`channels:read\` - Read public channel information
-- \`groups:read\` - Read private channel information  
-- \`im:read\` - Read direct messages
-- \`chat:write\` - Send messages
-- \`users:read\` - Read user information
-
-## API Limitations
-Non-Marketplace Slack apps have reduced API limits:
-- **conversations.history**: 1 request per minute, max 15 messages
-- **Rate limiting**: Tier 4 limits apply
-
-*Last updated: ${new Date().toISOString()}*`;
-
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: 'text/markdown',
-            text: apiDoc
-          }
-        ]
-      };
-
-    case 'slack://rate-limits':
-      const rateLimits = {
-        timestamp: new Date().toISOString(),
-        api_tier: "Tier 4 (Non-Marketplace Apps)",
-        limits: {
-          conversations_history: {
-            requests_per_minute: 1,
-            max_messages_per_request: 15,
-            note: "Severely limited for non-Marketplace apps as of May 2025"
-          },
-          conversations_list: {
-            requests_per_minute: 20,
-            max_channels_per_request: 1000
-          },
-          conversations_replies: {
-            requests_per_minute: 50,
-            max_replies_per_request: 1000
-          },
-          chat_postMessage: {
-            requests_per_minute: 50,
-            note: "Standard messaging rate limits"
-          },
-          users_info: {
-            requests_per_minute: 100,
-            note: "User lookup calls"
-          }
-        },
-        best_practices: [
-          "Cache channel lists to avoid repeated calls",
-          "Batch user info requests where possible",
-          "Use webhooks for real-time updates instead of polling",
-          "Implement exponential backoff for rate limit errors"
-        ]
-      };
-
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: 'application/json',
-            text: JSON.stringify(rateLimits, null, 2)
-          }
-        ]
-      };
-
-    case 'slack://message-formatting':
-      const formattingDoc = `# Slack Message Formatting Guide
-
-## Basic Text Formatting
-- **Bold**: \`*text*\` or \`**text**\`
-- **Italic**: \`_text_\` or \`__text__\`
-- **Strikethrough**: \`~text~\`
-- **Code**: \`\\\`text\\\`\`
-- **Code Block**: \`\\\`\\\`\\\`text\\\`\\\`\\\`\`
-
-## Mentions
-- **User**: \`<@USER_ID>\` or \`<@USER_ID|username>\`
-- **Channel**: \`<#CHANNEL_ID>\` or \`<#CHANNEL_ID|channelname>\`
-- **Everyone**: \`<!everyone>\`
-- **Here**: \`<!here>\`
-
-## Links
-- **Auto-link**: URLs are automatically linked
-- **Named link**: \`<URL|link text>\`
-- **Email**: \`<mailto:email@example.com|email text>\`
-
-## Threading
-- **Reply to thread**: Use \`thread_ts\` parameter with parent message timestamp
-- **Broadcast reply**: Set \`reply_broadcast: true\` to show in main channel
-
-## Block Kit (Advanced)
-Use the \`blocks\` parameter for rich formatting:
-- Sections with text and accessories
-- Buttons and interactive elements
-- Dividers and context blocks
-- File attachments and images
-
-## Emoji
-- **Standard**: \`:emoji_name:\`
-- **Custom**: \`:custom_emoji:\`
-- **Unicode**: Direct Unicode characters
-
-*Formatting reference updated: ${new Date().toISOString()}*`;
-
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: 'text/markdown',
-            text: formattingDoc
-          }
-        ]
-      };
-
-    default:
-      throw new Error(`Unknown resource: ${uri}`);
-  }
-});
-
-// PROMPTS - Slack workflow templates
-server.setRequestHandler(ListPromptsRequestSchema, async () => {
-  console.log('Prompts/list request');
-  return {
-    prompts: [
-      {
-        name: 'slack_team_standup',
-        description: 'Generate a team standup template for Slack channels',
-        arguments: [
-          { name: 'team_name', description: 'Name of the team', required: true },
-          { name: 'channel_id', description: 'Slack channel ID for standup', required: true },
-          { name: 'frequency', description: 'Standup frequency (daily, weekly)', required: true },
-          { name: 'timezone', description: 'Team timezone (e.g., PST, EST)', required: false }
-        ]
-      },
-      {
-        name: 'slack_incident_response',
-        description: 'Create an incident response communication template',
-        arguments: [
-          { name: 'severity', description: 'Incident severity (low, medium, high, critical)', required: true },
-          { name: 'incident_type', description: 'Type of incident', required: true },
-          { name: 'response_channel', description: 'Dedicated incident response channel ID', required: true }
-        ]
-      },
-      {
-        name: 'slack_project_kickoff',
-        description: 'Generate project kickoff communication template',
-        arguments: [
-          { name: 'project_name', description: 'Name of the project', required: true },
-          { name: 'project_channel', description: 'Project channel ID', required: true },
-          { name: 'stakeholders', description: 'Comma-separated list of stakeholder user IDs', required: true },
-          { name: 'timeline', description: 'Project timeline', required: false }
-        ]
-      }
-    ]
-  };
-});
-
-server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-  console.log('Prompts/get request:', request.params);
-  const { name, arguments: args } = request.params;
-
-  switch (name) {
-    case 'slack_team_standup':
-      const standupArgs = args as { team_name?: string; channel_id?: string; frequency?: string; timezone?: string };
-      const timezone = standupArgs.timezone || 'PST';
-      
-      return {
-        description: `Team standup template for ${standupArgs.team_name} - ${standupArgs.frequency}`,
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `# ${standupArgs.team_name} ${standupArgs.frequency?.charAt(0).toUpperCase()}${standupArgs.frequency?.slice(1)} Standup
-
-**Channel**: <#${standupArgs.channel_id}>
-**Frequency**: ${standupArgs.frequency}
-**Timezone**: ${timezone}
-
-## Standup Format
-Each team member should share:
-
-### 🎯 **What I accomplished**
-- Key tasks completed since last standup
-- Major milestones reached
-
-### 🚀 **What I'm working on today**
-- Current priorities and focus areas
-- Tasks planned for completion
-
-### 🚧 **Blockers & Help needed**
-- Any obstacles preventing progress
-- Specific assistance requests
-
-## Threading Guidelines
-- Reply in thread for detailed discussions
-- Keep main channel updates concise
-- Use @here for urgent items requiring immediate attention
-
-## Action Items
-- Document any blockers in project management tool
-- Schedule follow-up meetings for complex issues
-- Update project status based on progress shared
-
-*Template generated: ${new Date().toISOString()}*`
-            }
-          }
-        ]
-      };
-
-    case 'slack_incident_response':
-      const incidentArgs = args as { severity?: string; incident_type?: string; response_channel?: string };
-      
-      return {
-        description: `Incident response template - ${incidentArgs.severity} severity ${incidentArgs.incident_type}`,
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `# 🚨 INCIDENT RESPONSE: ${incidentArgs.incident_type?.toUpperCase()}
-
-**Severity**: ${incidentArgs.severity?.toUpperCase()}
-**Response Channel**: <#${incidentArgs.response_channel}>
-**Incident Started**: ${new Date().toISOString()}
-
-## Immediate Actions Required
-
-### 🔍 **Assessment Phase**
-- [ ] Identify scope and impact
-- [ ] Gather initial technical details  
-- [ ] Determine customer impact level
-- [ ] Assign incident commander
-
-### 📢 **Communication Phase**
-- [ ] Notify stakeholders in <#${incidentArgs.response_channel}>
-- [ ] Update status page if customer-facing
-- [ ] Prepare customer communication if needed
-- [ ] Set up war room if critical
-
-### 🛠️ **Resolution Phase**
-- [ ] Deploy immediate mitigation if available
-- [ ] Implement permanent fix
-- [ ] Verify resolution and monitor
-- [ ] Conduct post-incident review
-
-## Key Contacts
-- **Incident Commander**: TBD
-- **Technical Lead**: TBD  
-- **Communications Lead**: TBD
-- **Customer Success**: TBD
-
-## Timeline & Updates
-Thread replies below with timestamp updates on progress.
-
-*Incident template generated: ${new Date().toISOString()}*`
-            }
-          }
-        ]
-      };
-
-    case 'slack_project_kickoff':
-      const kickoffArgs = args as { project_name?: string; project_channel?: string; stakeholders?: string; timeline?: string };
-      const stakeholderMentions = kickoffArgs.stakeholders ? 
-        kickoffArgs.stakeholders.split(',').map(id => `<@${id.trim()}>`).join(' ') : 'TBD';
-      
-      return {
-        description: `Project kickoff template for ${kickoffArgs.project_name}`,
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `# 🚀 PROJECT KICKOFF: ${kickoffArgs.project_name}
-
-**Project Channel**: <#${kickoffArgs.project_channel}>
-**Stakeholders**: ${stakeholderMentions}
-**Timeline**: ${kickoffArgs.timeline || 'TBD'}
-**Kickoff Date**: ${new Date().toLocaleDateString()}
-
-## Project Overview
-*[Add project description and objectives here]*
-
-## Key Stakeholders & Roles
-${stakeholderMentions}
-
-## Success Criteria
-- [ ] Define measurable objectives
-- [ ] Establish key milestones
-- [ ] Set quality standards
-- [ ] Agree on delivery timeline
-
-## Communication Plan
-- **Daily Updates**: Progress shared in <#${kickoffArgs.project_channel}>
-- **Weekly Reviews**: Status meetings scheduled
-- **Milestone Reviews**: Stakeholder check-ins
-- **Ad-hoc Updates**: Use threading for discussions
-
-## Next Steps
-1. **Requirements Gathering** - Finalize scope and specifications
-2. **Resource Allocation** - Assign team members and roles  
-3. **Timeline Planning** - Create detailed project schedule
-4. **Kickoff Meeting** - Schedule alignment session
-
-## Resources & Links
-- Project documentation: *[Add link]*
-- Meeting calendar: *[Add link]*
-- File repository: *[Add link]*
-
-Ready to make this project a success! 💪
-
-*Project kickoff generated: ${new Date().toISOString()}*`
-            }
-          }
-        ]
-      };
-
-    default:
-      throw new Error(`Unknown prompt: ${name}`);
-  }
-});
-
-// Homepage - Slack OAuth Authorization
-app.get('/', (req, res) => {
-  const clientId = process.env.SLACK_CLIENT_ID || 'YOUR_CLIENT_ID';
-  const redirectUri = `${req.protocol}://${req.get('host')}/auth/slack/callback`;
-  
-  const scopes = [
-    "channels:history",
-    "channels:read", 
-    "channels:write",
-    "chat:write",
-    "files:read",
-    "groups:history",
-    "groups:read",
-    "groups:write", 
-    "im:history",
-    "im:read",
-    "im:write",
-    "links:read",
-    "mpim:history",
-    "mpim:read", 
-    "mpim:write",
-    "reactions:write",
-    "users.profile:read",
-    "users:read",
-    "files:write"
-  ].join(',');
-  
-  const slackAuthUrl = `https://slack.com/oauth/v2/authorize?client_id=${clientId}&user_scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}`;
-
-  res.setHeader('Content-Type', 'text/html');
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Slack MCP Server - Connect to Slack</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { 
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-                max-width: 600px; 
-                margin: 60px auto; 
-                padding: 40px; 
-                background: #f8f9fa; 
-                text-align: center;
-            }
-            .container { 
-                background: white; 
-                padding: 40px; 
-                border-radius: 12px; 
-                box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
-            }
-            h1 { 
-                color: #4A154B; 
-                margin-bottom: 20px; 
-                font-size: 2.5em;
-            }
-            .subtitle {
-                color: #666;
-                font-size: 1.2em;
-                margin-bottom: 30px;
-            }
-            .slack-btn { 
-                display: inline-block; 
-                padding: 16px 32px; 
-                background: #4A154B; 
-                color: #fff; 
-                border-radius: 8px; 
-                text-decoration: none; 
-                font-size: 18px; 
-                font-weight: bold;
-                transition: background 0.3s;
-                margin: 20px 0;
-            }
-            .slack-btn:hover { 
-                background: #611f69; 
-            }
-            .info-box {
-                background: #e3f2fd;
-                padding: 20px;
-                border-radius: 8px;
-                margin: 30px 0;
-                text-align: left;
-            }
-            .scopes {
-                background: #f5f5f5;
-                padding: 15px;
-                border-radius: 6px;
-                margin: 20px 0;
-                font-family: monospace;
-                font-size: 12px;
-                text-align: left;
-            }
-            .step {
-                margin: 15px 0;
-                padding: 10px;
-                border-left: 4px solid #4A154B;
-                background: #fafafa;
-            }
-            .config-info {
-                background: #fff3cd;
-                border: 1px solid #ffeaa7;
-                padding: 15px;
-                border-radius: 6px;
-                margin: 20px 0;
-                font-size: 14px;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🚀 Slack MCP Server</h1>
-            <p class="subtitle">Connect your Slack workspace to get started</p>
-            
-            <div class="info-box">
-                <h3>📋 What This Does:</h3>
-                <div class="step">1. Redirects you to Slack for authorization</div>
-                <div class="step">2. You approve the requested permissions</div>
-                <div class="step">3. Slack redirects back with your access token</div>
-                <div class="step">4. Copy the token to use with MCP clients</div>
-            </div>
-
-            <a href="${slackAuthUrl}" class="slack-btn">
-                📱 Connect to Slack
-            </a>
-
-            <div class="info-box">
-                <h3>🔑 Requested Permissions:</h3>
-                <div class="scopes">${scopes.split(',').join('<br>')}</div>
-            </div>
-
-            <div class="config-info">
-                <strong>⚙️ Configuration:</strong><br>
-                Client ID: <code>${clientId}</code><br>
-                Redirect URI: <code>${redirectUri}</code><br>
-                MCP Endpoint: <code>${req.protocol}://${req.get('host')}/mcp</code>
-            </div>
-
-            ${clientId === 'YOUR_CLIENT_ID' ? `
-            <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 6px; margin: 20px 0;">
-                <strong>⚠️ Setup Required:</strong><br>
-                Please set your SLACK_CLIENT_ID environment variable before using OAuth.
-            </div>
-            ` : ''}
-        </div>
-    </body>
-    </html>
-  `);
-});
-
-// Connection monitoring middleware
-app.use('/mcp', (req, res, next) => {
-  const startTime = Date.now();
-  const connectionId = `${req.ip}-${startTime}`;
-  
-  console.log(`[${connectionId}] MCP Connection started from ${req.ip}`);
-  
-  res.on('finish', () => {
-    const duration = Date.now() - startTime;
-    console.log(`[${connectionId}] MCP Connection finished in ${duration}ms`);
-  });
-  
-  res.on('close', () => {
-    const duration = Date.now() - startTime;
-    console.log(`[${connectionId}] MCP Connection closed after ${duration}ms`);
-  });
-  
-  next();
 });
 
 // MCP endpoint with stateless transport (no session management)
@@ -1081,38 +585,77 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+// Homepage - Slack OAuth Authorization
+app.get('/', (req, res) => {
+  const clientId = process.env.SLACK_CLIENT_ID;
+  
+  if (!clientId) {
+    return res.send(renderConfigError());
+  }
+  
+  const redirectUri = `${req.protocol}://${req.get('host')}/auth/slack/callback`;
+  const scopes = [
+    "channels:history",
+    "channels:read", 
+    "channels:write",
+    "chat:write",
+    "files:read",
+    "groups:history",
+    "groups:read",
+    "groups:write", 
+    "im:history",
+    "im:read",
+    "im:write",
+    "links:read",
+    "mpim:history",
+    "mpim:read", 
+    "mpim:write",
+    "reactions:write",
+    "users.profile:read",
+    "users:read",
+    "files:write"
+  ].join(',');
+  
+  const slackAuthUrl = `https://slack.com/oauth/v2/authorize?client_id=${clientId}&user_scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+  const serverUrl = `${req.protocol}://${req.get('host')}`;
+  
+  res.send(renderHomepage(slackAuthUrl, serverUrl));
+});
+
+// Connection monitoring middleware
+app.use('/mcp', (req, res, next) => {
+  const startTime = Date.now();
+  const connectionId = `${req.ip}-${startTime}`;
+  
+  console.log(`[${connectionId}] MCP Connection started from ${req.ip}`);
+  
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    console.log(`[${connectionId}] MCP Connection finished in ${duration}ms`);
+  });
+  
+  res.on('close', () => {
+    const duration = Date.now() - startTime;
+    console.log(`[${connectionId}] MCP Connection closed after ${duration}ms`);
+  });
+  
+  next();
+});
+
 // OAuth callback endpoint
 app.get('/auth/slack/callback', async (req, res) => {
   const { code, error } = req.query;
   
   if (error) {
-    return res.status(400).send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-          <title>Slack Authorization Error</title>
-          <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 60px auto; padding: 40px; background: #f8f9fa; text-align: center; }
-              .container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-              .error { background: #f8d7da; color: #721c24; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          </style>
-      </head>
-      <body>
-          <div class="container">
-              <h1>❌ Authorization Error</h1>
-              <div class="error">
-                  <strong>Error:</strong> ${error}<br>
-                  The Slack authorization was not completed successfully.
-              </div>
-              <a href="/">← Back to Authorization</a>
-          </div>
-      </body>
-      </html>
-    `);
+    return res.status(400).send(
+      renderError('Authorization Failed', `Slack returned an error: ${error}`)
+    );
   }
 
   if (!code) {
-    return res.status(400).send('Missing authorization code');
+    return res.status(400).send(
+      renderError('No Authorization Code', 'The Slack authorization process was incomplete.')
+    );
   }
 
   try {
@@ -1147,165 +690,40 @@ app.get('/auth/slack/callback', async (req, res) => {
     // Get user token (this is what they'll use with MCP)
     const userToken = tokenData.authed_user?.access_token;
     const teamName = tokenData.team?.name;
-    const userName = tokenData.authed_user?.id;
+    const teamId = tokenData.team?.id;
+    const userId = tokenData.authed_user?.id;
+    const userName = tokenData.authed_user?.name;
+    const scope = tokenData.authed_user?.scope;
 
-    if (!userToken) {
-      throw new Error('No user access token received from Slack');
+    if (!userToken || !teamId || !userId) {
+      throw new Error('Incomplete token data received from Slack');
     }
 
+    // Store the token in the database
+    await dbService.storeToken({
+      team_id: teamId,
+      team_name: teamName || 'Unknown Team',
+      user_id: userId,
+      user_name: userName,
+      access_token: userToken,
+      scope: scope || '',
+      token_type: 'user',
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      is_active: true
+    });
+
+    console.log(`Stored new Slack token for team ${teamName} (${teamId}) and user ${userName} (${userId})`);
+
     // Success page with token
-    res.setHeader('Content-Type', 'text/html');
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-          <title>Slack Authorization Success</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <style>
-              body { 
-                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-                  max-width: 700px; 
-                  margin: 60px auto; 
-                  padding: 40px; 
-                  background: #f8f9fa; 
-                  text-align: center;
-              }
-              .container { 
-                  background: white; 
-                  padding: 40px; 
-                  border-radius: 12px; 
-                  box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
-              }
-              h1 { 
-                  color: #4A154B; 
-                  margin-bottom: 20px; 
-                  font-size: 2.5em;
-              }
-              .success { 
-                  background: #d4edda; 
-                  color: #155724; 
-                  padding: 20px; 
-                  border-radius: 8px; 
-                  margin: 20px 0; 
-              }
-              .token-box {
-                  background: #f8f9fa;
-                  border: 2px solid #4A154B;
-                  padding: 20px;
-                  border-radius: 8px;
-                  margin: 30px 0;
-                  font-family: 'Monaco', 'Consolas', monospace;
-                  word-break: break-all;
-                  text-align: left;
-                  position: relative;
-              }
-              .copy-btn {
-                  position: absolute;
-                  top: 10px;
-                  right: 10px;
-                  background: #4A154B;
-                  color: white;
-                  border: none;
-                  padding: 8px 12px;
-                  border-radius: 4px;
-                  cursor: pointer;
-                  font-size: 12px;
-              }
-              .copy-btn:hover {
-                  background: #611f69;
-              }
-              .instructions {
-                  background: #e3f2fd;
-                  padding: 20px;
-                  border-radius: 8px;
-                  margin: 30px 0;
-                  text-align: left;
-              }
-              .step {
-                  margin: 10px 0;
-                  padding: 8px;
-                  border-left: 3px solid #4A154B;
-                  background: #fafafa;
-              }
-          </style>
-      </head>
-      <body>
-          <div class="container">
-              <h1>🎉 Success!</h1>
-              
-              <div class="success">
-                  <strong>✅ Slack Authorization Complete</strong><br>
-                  Team: <strong>${teamName || 'Unknown'}</strong><br>
-                  User: <strong>${userName || 'Unknown'}</strong>
-              </div>
-
-              <h2>📋 Your Slack Access Token</h2>
-              <p>Copy this token to use with your MCP client:</p>
-              
-              <div class="token-box">
-                  <button class="copy-btn" onclick="copyToken()">📋 Copy</button>
-                  <div id="token">${userToken}</div>
-              </div>
-
-              <div class="instructions">
-                  <h3>🔧 How to Use This Token:</h3>
-                  <div class="step">1. Copy the token above</div>
-                  <div class="step">2. Set it as SLACK_BOT_TOKEN in your environment</div>
-                  <div class="step">3. Configure your MCP client to use: <code>${req.protocol}://${req.get('host')}/mcp</code></div>
-                  <div class="step">4. Start using Slack tools in your MCP client!</div>
-              </div>
-
-              <p style="margin-top: 30px;">
-                  <a href="/">← Authorize Another Account</a>
-              </p>
-          </div>
-
-          <script>
-              function copyToken() {
-                  const tokenText = document.getElementById('token').textContent;
-                  navigator.clipboard.writeText(tokenText).then(() => {
-                      const btn = document.querySelector('.copy-btn');
-                      const originalText = btn.textContent;
-                      btn.textContent = '✅ Copied!';
-                      btn.style.background = '#28a745';
-                      setTimeout(() => {
-                          btn.textContent = originalText;
-                          btn.style.background = '#4A154B';
-                      }, 2000);
-                  }).catch(() => {
-                      alert('Failed to copy token. Please select and copy manually.');
-                  });
-              }
-          </script>
-      </body>
-      </html>
-    `);
+    const serverUrl = `${req.protocol}://${req.get('host')}`;
+    res.send(renderSuccess(userToken, serverUrl));
 
   } catch (error) {
     console.error('OAuth callback error:', error);
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-          <title>Slack Authorization Error</title>
-          <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 60px auto; padding: 40px; background: #f8f9fa; text-align: center; }
-              .container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-              .error { background: #f8d7da; color: #721c24; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          </style>
-      </head>
-      <body>
-          <div class="container">
-              <h1>❌ Authorization Error</h1>
-              <div class="error">
-                  <strong>Error:</strong> ${error.message}<br>
-                  Please check your server configuration and try again.
-              </div>
-              <a href="/">← Back to Authorization</a>
-          </div>
-      </body>
-      </html>
-    `);
+    res.status(500).send(
+      renderError('Server Error', `Failed to process authorization: ${error.message}`)
+    );
   }
 });
 
@@ -1321,4 +739,4 @@ async function main() {
 main().catch((error) => {
   console.error('Failed to start server:', error);
   process.exit(1);
-}); 
+});

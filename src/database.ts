@@ -33,6 +33,34 @@ export interface ChannelMembership {
   added_at: number;
 }
 
+export interface SlackToken {
+  id?: number;
+  team_id: string;
+  team_name: string;
+  user_id: string;
+  user_name?: string;
+  access_token: string;
+  scope: string;
+  token_type: string;
+  created_at: number;
+  updated_at: number;
+  is_active: boolean;
+}
+
+export interface DMConversation {
+  id: string;
+  type: 'im' | 'mpim';
+  user_id?: string; // For IM conversations, the other user's ID
+  user_name?: string; // For IM conversations, the other user's name
+  is_user_deleted?: boolean;
+  created: number;
+  updated_at: number;
+  latest_message_ts?: string;
+  unread_count?: number;
+  is_open: boolean;
+  priority?: number;
+}
+
 class DatabaseService {
   private db: sqlite3.Database;
   private initialized = false;
@@ -87,6 +115,41 @@ class DatabaseService {
         PRIMARY KEY (channel_id, user_id),
         FOREIGN KEY (channel_id) REFERENCES channels(id),
         FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
+
+    // Create slack_tokens table
+    await run(`
+      CREATE TABLE IF NOT EXISTS slack_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id TEXT NOT NULL,
+        team_name TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        user_name TEXT,
+        access_token TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        token_type TEXT NOT NULL DEFAULT 'user',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT 1,
+        UNIQUE(team_id, user_id)
+      )
+    `);
+
+    // Create dm_conversations table for DM-specific data
+    await run(`
+      CREATE TABLE IF NOT EXISTS dm_conversations (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL CHECK(type IN ('im', 'mpim')),
+        user_id TEXT,
+        user_name TEXT,
+        is_user_deleted BOOLEAN DEFAULT 0,
+        created INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        latest_message_ts TEXT,
+        unread_count INTEGER DEFAULT 0,
+        is_open BOOLEAN DEFAULT 1,
+        priority INTEGER DEFAULT 0
       )
     `);
 
@@ -267,7 +330,154 @@ class DatabaseService {
     `, [userId]);
   }
 
+  // Token management methods
+  async storeToken(token: Omit<SlackToken, 'id'>): Promise<void> {
+    await this.initialize();
+    
+    const run = promisify(this.db.run.bind(this.db));
+    
+    // First, deactivate any existing tokens for this team/user
+    await run(`
+      UPDATE slack_tokens 
+      SET is_active = 0, updated_at = ? 
+      WHERE team_id = ? AND user_id = ?
+    `, [Date.now(), token.team_id, token.user_id]);
+    
+    // Insert the new token
+    await run(`
+      INSERT INTO slack_tokens 
+      (team_id, team_name, user_id, user_name, access_token, scope, token_type, created_at, updated_at, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `, [
+      token.team_id,
+      token.team_name,
+      token.user_id,
+      token.user_name,
+      token.access_token,
+      token.scope,
+      token.token_type,
+      token.created_at,
+      token.updated_at
+    ]);
+  }
 
+  async getActiveToken(teamId?: string, userId?: string): Promise<SlackToken | null> {
+    await this.initialize();
+    
+    const get = promisify(this.db.get.bind(this.db));
+    
+    let query = 'SELECT * FROM slack_tokens WHERE is_active = 1';
+    const params: any[] = [];
+    
+    if (teamId && userId) {
+      query += ' AND team_id = ? AND user_id = ?';
+      params.push(teamId, userId);
+    } else if (teamId) {
+      query += ' AND team_id = ?';
+      params.push(teamId);
+    }
+    
+    query += ' ORDER BY updated_at DESC LIMIT 1';
+    
+    return await get(query, params);
+  }
+
+  async getAllTokens(): Promise<SlackToken[]> {
+    await this.initialize();
+    
+    const all = promisify(this.db.all.bind(this.db));
+    return await all('SELECT * FROM slack_tokens ORDER BY updated_at DESC');
+  }
+
+  async getActiveTokens(): Promise<SlackToken[]> {
+    await this.initialize();
+    
+    const all = promisify(this.db.all.bind(this.db));
+    return await all('SELECT * FROM slack_tokens WHERE is_active = 1 ORDER BY updated_at DESC');
+  }
+
+  async deactivateToken(tokenId: number): Promise<void> {
+    await this.initialize();
+    
+    const run = promisify(this.db.run.bind(this.db));
+    await run('UPDATE slack_tokens SET is_active = 0, updated_at = ? WHERE id = ?', [Date.now(), tokenId]);
+  }
+
+  async deleteToken(tokenId: number): Promise<void> {
+    await this.initialize();
+    
+    const run = promisify(this.db.run.bind(this.db));
+    await run('DELETE FROM slack_tokens WHERE id = ?', [tokenId]);
+  }
+
+  // DM conversation management methods
+  async storeDMConversations(dms: DMConversation[]): Promise<void> {
+    await this.initialize();
+    
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO dm_conversations 
+      (id, type, user_id, user_name, is_user_deleted, created, updated_at, latest_message_ts, unread_count, is_open, priority)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const dm of dms) {
+      await new Promise((resolve, reject) => {
+        stmt.run([
+          dm.id,
+          dm.type,
+          dm.user_id,
+          dm.user_name,
+          dm.is_user_deleted || false,
+          dm.created,
+          dm.updated_at,
+          dm.latest_message_ts,
+          dm.unread_count || 0,
+          dm.is_open,
+          dm.priority || 0
+        ], (err) => {
+          if (err) reject(err);
+          else resolve(undefined);
+        });
+      });
+    }
+    
+    stmt.finalize();
+  }
+
+  async getAllDMs(): Promise<DMConversation[]> {
+    await this.initialize();
+    
+    const all = promisify(this.db.all.bind(this.db));
+    return await all('SELECT * FROM dm_conversations ORDER BY priority DESC, updated_at DESC');
+  }
+
+  async getOpenDMs(): Promise<DMConversation[]> {
+    await this.initialize();
+    
+    const all = promisify(this.db.all.bind(this.db));
+    return await all('SELECT * FROM dm_conversations WHERE is_open = 1 ORDER BY priority DESC, updated_at DESC');
+  }
+
+  async getDMsByType(type: 'im' | 'mpim'): Promise<DMConversation[]> {
+    await this.initialize();
+    
+    const all = promisify(this.db.all.bind(this.db));
+    return await all('SELECT * FROM dm_conversations WHERE type = ? ORDER BY priority DESC, updated_at DESC', [type]);
+  }
+
+  async getDMConversation(dmId: string): Promise<DMConversation | null> {
+    await this.initialize();
+    
+    const get = promisify(this.db.get.bind(this.db));
+    return await get('SELECT * FROM dm_conversations WHERE id = ?', [dmId]);
+  }
+
+  async updateDMPriority(dmId: string, priority: number): Promise<void> {
+    await this.initialize();
+    
+    const run = promisify(this.db.run.bind(this.db));
+    await run('UPDATE dm_conversations SET priority = ?, updated_at = ? WHERE id = ?', [priority, Date.now(), dmId]);
+  }
 }
 
 export const dbService = new DatabaseService(); 

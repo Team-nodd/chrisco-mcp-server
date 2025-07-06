@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Slack Authorization Success</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            max-width: 600px; 
+            margin: 60px auto; 
+            padding: 40px; 
+            background: #f8f9fa; 
+            text-align: center;
+        }
+        .container { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
+        }
+        h1 { 
+            color: #4A154B; 
+            margin-bottom: 20px; 
+        }
+        .success { 
+            color: #28a745; 
+            font-size: 1.2em; 
+            margin-bottom: 30px; 
+        }
+        .token-box { 
+            background: #f8f9fa; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin: 20px 0; 
+            word-break: break-all; 
+            font-family: monospace;
+            border: 2px solid #28a745;
+        }
+        .copy-btn { 
+            background: #28a745; 
+            color: white; 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 16px;
+            margin: 10px 0;
+        }
+        .copy-btn:hover { 
+            background: #218838; 
+        }
+        .instructions {
+            background: #e3f2fd;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 30px 0;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✅ Authorization Successful!</h1>
+        <p class="success">Your Slack workspace is now connected!</p>
+        
+        <h3>🔑 Your Access Token:</h3>
+        <div class="token-box" id="tokenBox">
+            {{ACCESS_TOKEN}}
+        </div>
+        
+        <button class="copy-btn" onclick="copyToken()">📋 Copy Token</button>
+        
+        <div class="instructions">
+            <h4>📱 Next Steps:</h4>
+            <ol>
+                <li>Copy the access token above</li>
+                <li>Set <code>SLACK_BOT_TOKEN={{ACCESS_TOKEN}}</code> in your environment</li>
+                <li>Configure your MCP client with server URL: <code>{{SERVER_URL}}/mcp</code></li>
+                <li>Test the connection using the ping tool</li>
+            </ol>
+        </div>
+    </div>
+    
+    <script>
+        function copyToken() {
+            const tokenText = document.getElementById('tokenBox').textContent.trim();
+            navigator.clipboard.writeText(tokenText).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = '✅ Copied!';
+                setTimeout(() => {
+                    btn.textContent = '📋 Copy Token';
+                }, 2000);
+            });
+        }
+    </script>
+</body>
+</html> 
