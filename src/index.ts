@@ -329,14 +329,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
           
           // Extract one-on-one DM conversations for dedicated DM storage
+          // Get current user ID from token info first
+          const tokenInfo = await getTokenAndChannel({});
+          const currentUserId = tokenInfo.tokenInfo?.user_id;
+          
           const dmConversations: DMConversation[] = result.conversations
             .filter((channel: any) => channel.type === 'im') // Only one-on-one DMs
             .map((dm: any) => {
-              // Find the other user (not the bot/current user)
+              // Find the other user (not the current user)
               let otherUser = null;
               if (dm.member_ids && dm.member_ids.length === 2) {
-                // Find the user who is not the current user/bot
-                const currentUserId = result.users.find((u: any) => u.is_bot)?.id;
+                // Find the user who is not the current user
                 otherUser = result.users.find((u: any) => 
                   dm.member_ids.includes(u.id) && u.id !== currentUserId
                 );
