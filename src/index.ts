@@ -15,6 +15,7 @@ import express from 'express';
 import cors from 'cors';
 import { fetchLatestMessagesFromChannel, fetchThreadReplies, sendMessage, refreshAllSlackData } from './slack.js';
 import { dbService, StoredChannel, StoredUser, ChannelMembership } from './database.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -1016,7 +1017,10 @@ app.use('/mcp', (req, res, next) => {
   next();
 });
 
-// MCP endpoint using SDK transport
+// Store all active transports by session ID
+const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
+
+// MCP endpoint with proper session management
 app.post('/mcp', async (req, res) => {
   console.log('MCP request received:', req.method, req.url);
   console.log('Headers:', req.headers);
@@ -1026,507 +1030,119 @@ app.post('/mcp', async (req, res) => {
   req.setTimeout(25000); // 25 second request timeout
   res.setTimeout(25000); // 25 second response timeout
   
-  try {
-    // Create a fresh server instance for each request
-    const requestServer = new Server(
-      {
-        name: 'slack-mcp-server',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {
-          tools: {
-            listChanged: false
+  // Check if this is an initial connection request
+  const isInitRequest = req.body && req.body.method === 'initialize';
+
+  if (isInitRequest) {
+    console.log('Handling initialize request - creating new session');
+    
+    // For new sessions, generate a unique ID
+    const sessionId = uuidv4();
+    
+    try {
+      // Create a transport for this session
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => sessionId,
+      });
+      
+      // Connect the main server to this transport
+      await server.connect(transport);
+      
+      // Store it for future requests 
+      transports[sessionId] = transport;
+      
+      // Tell LLM application the session ID
+      res.setHeader('Mcp-Session-Id', sessionId);
+      console.log(`Created new session: ${sessionId}`);
+      
+      // Handle the initialize request
+      await transport.handleRequest(req, res, req.body);
+      
+    } catch (error) {
+      console.error('Error creating session:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { 
+            code: -32603, 
+            message: 'Failed to create session',
+            data: error.message
           },
-          resources: {
-            subscribe: false,
-            listChanged: false
-          },
-          prompts: {
-            listChanged: false
-          }
-        },
-      }
-    );
-
-    // Copy all handlers from the main server to this request server
-    // INITIALIZATION handler
-    requestServer.setRequestHandler(InitializeRequestSchema, async (request) => {
-      console.log('Initialize request received:', JSON.stringify(request));
-      return {
-        protocolVersion: '2024-11-05',
-        capabilities: {
-          tools: {
-            listChanged: false
-          },
-          resources: {
-            subscribe: false,
-            listChanged: false
-          },
-          prompts: {
-            listChanged: false
-          }
-        },
-        serverInfo: {
-          name: 'slack-mcp-server',
-          version: '1.0.0'
-        }
-      };
-    });
-
-    // TOOLS handler
-    requestServer.setRequestHandler(ListToolsRequestSchema, async () => {
-      console.log('Tools/list request - sending Slack tool definitions');
-      return {
-        tools: [
-          {
-            name: 'ping',
-            description: 'Simple connectivity test that responds immediately. Use this to verify MCP connection is working.',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: []
-            }
-          },
-          {
-            name: 'get_slack_channels',
-            description: 'Retrieve all Slack channels/conversations from local storage including regular channels, private channels, DMs, and group DMs. Returns cached data for fast access. Each channel includes ID, name, type, privacy status, member count, topic, purpose, and all members (with their ID, name, real_name, display_name). Use refresh_all_slack_data first if you need current data from Slack.',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: []
-            }
-          },
-          {
-            name: 'refresh_all_slack_data',
-            description: 'Comprehensive refresh that fetches all channels, extracts user profiles from channel memberships, and stores everything locally. This replaces separate channel/user refreshes with a single efficient operation. Calls Slack API to get: all conversations (channels/DMs/groups), member lists for each, and detailed user profiles (names, emails, timezones, roles). Stores channels, users, and membership relationships in local database.',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: []
-            }
-          },
-          {
-            name: 'get_slack_users',
-            description: 'Retrieve all users from local storage with comprehensive profile information including display names, real names, email addresses, profile images, timezones, and role flags (bot, admin, owner, guest types). Only returns users discovered through channel memberships. Use refresh_all_slack_data to update user data.',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-              required: []
-            }
-          },
-          {
-            name: 'get_channel_members',
-            description: 'Get detailed member information for a specific channel from local storage. Returns user profiles for all members including names, roles, and profile data. Requires channel_id parameter. Use refresh_all_slack_data first to ensure current membership data.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                channel_id: {
-                  type: 'string',
-                  description: 'Slack channel ID (e.g., C1234567890) to retrieve members for. Find channel IDs using get_slack_channels.'
-                }
-              },
-              required: ['channel_id']
-            }
-          },
-          {
-            name: 'get_channel_messages',
-            description: 'Fetch recent messages from a Slack channel in real-time via Slack API (not cached). Returns up to 15 messages with full thread replies nested under parent messages. Includes message text, timestamps, user info, reactions, and rich formatting. Limited by Slack API rate limits for non-marketplace apps.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                channel: {
-                  type: 'string',
-                  description: 'Slack channel ID (e.g., C1234567890) to fetch messages from. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable. Find channel IDs using get_slack_channels.'
-                }
-              },
-              required: []
-            }
-          },
-          {
-            name: 'get_thread_replies',
-            description: 'Retrieve all replies to a specific message thread in real-time via Slack API. Useful for getting complete conversation context around a threaded discussion. Returns chronological list of replies with user info, timestamps, and formatting.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                channel: {
-                  type: 'string',
-                  description: 'Slack channel ID containing the thread. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable.'
-                },
-                thread_ts: {
-                  type: 'string',
-                  description: 'Timestamp of the parent message that started the thread (e.g., "1234567890.123456"). Get this from message timestamps in get_channel_messages results.'
-                },
-                limit: {
-                  type: 'number',
-                  description: 'Maximum number of replies to fetch (default: 50, max: 1000)',
-                  default: 50
-                }
-              },
-              required: ['thread_ts']
-            }
-          },
-          {
-            name: 'send_slack_message',
-            description: 'Send a message to a Slack channel or direct message to a user. Supports both channel IDs (C1234567890) and user IDs (U1234567890) for direct messages. Includes optional threading and formatting options.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                channel: {
-                  type: 'string',
-                  description: 'Slack channel ID (C1234567890) OR user ID (U1234567890) for direct message. If user ID provided, will automatically open/find DM channel. If omitted, uses SLACK_DEFAULT_CHANNEL environment variable. Find IDs using get_slack_channels or get_slack_users.'
-                },
-                text: {
-                  type: 'string',
-                  description: 'Message text to send. Supports Slack markdown formatting (bold, italic, links, mentions). Use <@USER_ID> for user mentions and <#CHANNEL_ID> for channel mentions.'
-                },
-                thread_ts: {
-                  type: 'string',
-                  description: 'Optional: Reply to this message timestamp to create a threaded reply. Get thread timestamps from get_channel_messages results.'
-                },
-                reply_broadcast: {
-                  type: 'boolean',
-                  description: 'Optional: When replying to a thread, also show the reply in the main channel (default: false)',
-                  default: false
-                },
-                unfurl_links: {
-                  type: 'boolean',
-                  description: 'Optional: Whether Slack should automatically expand links with previews (default: true)',
-                  default: true
-                },
-                unfurl_media: {
-                  type: 'boolean',
-                  description: 'Optional: Whether Slack should automatically expand media links with previews (default: true)',
-                  default: true
-                }
-              },
-              required: ['text']
-            }
-          },
-        ]
-      };
-    });
-
-    // CALL TOOL handler - copy the entire implementation
-    requestServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      // Helper function to get token and channel from environment variables
-      const getTokenAndChannel = (args: any) => {
-        const token = process.env.SLACK_BOT_TOKEN;
-        const channel = args.channel || process.env.SLACK_DEFAULT_CHANNEL;
-        
-        if (!token) {
-          throw new Error('SLACK_BOT_TOKEN environment variable is required.');
-        }
-        
-        return { token, channel };
-      };
-
-      // Timeout wrapper to prevent hanging
-      const executeWithTimeout = async (operation: () => Promise<any>, timeoutMs = 30000) => {
-        return Promise.race([
-          operation(),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Operation timed out after 30 seconds')), timeoutMs)
-          )
-        ]);
-      };
-
-      try {
-        console.log(`MCP Tool called: ${name}`, JSON.stringify(args));
-        
-        const result = await executeWithTimeout(async () => {
-          switch (name) {
-            case 'ping': {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: 'Pong!'
-                  }
-                ]
-              };
-            }
-
-            case 'get_slack_channels': {
-              const channelsWithMembers = await dbService.getChannelsWithMembers();
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify(channelsWithMembers, null, 2)
-                  }
-                ]
-              };
-            }
-
-            case 'refresh_all_slack_data': {
-              const { token } = getTokenAndChannel({});
-              
-              console.log('Starting refresh_all_slack_data...');
-              
-              // Use the unified refresh function
-              const result = await refreshAllSlackData(token);
-              
-              console.log('Data fetched, storing to database...');
-              
-              // Transform conversations to stored channel format
-              const storedChannels: StoredChannel[] = result.conversations.map((channel: any) => ({
-                id: channel.id,
-                name: channel.name || '',
-                type: channel.type || 'channel',
-                is_private: channel.is_private || false,
-                is_archived: channel.is_archived || false,
-                topic: channel.topic?.value || '',
-                purpose: channel.purpose?.value || '',
-                num_members: channel.num_members || channel.member_ids?.length || 0,
-                created: channel.created || Date.now() / 1000,
-                updated_at: Date.now()
-              }));
-              
-              // Transform users to stored format
-              const storedUsers: StoredUser[] = result.users.map((user: any) => ({
-                id: user.id,
-                name: user.name || '',
-                display_name: user.display_name || '',
-                real_name: user.real_name || '',
-                email: user.email || '',
-                is_bot: user.is_bot || false,
-                is_deleted: user.is_deleted || false,
-                is_restricted: user.is_restricted || false,
-                is_ultra_restricted: user.is_ultra_restricted || false,
-                is_stranger: false, // Not available in Slack API
-                is_app_user: user.is_app_user || false,
-                is_external: false, // Not available in Slack API
-                is_admin: user.is_admin || false,
-                is_owner: user.is_owner || false,
-                profile_image: user.profile_image || '',
-                timezone: user.timezone || '',
-                locale: user.locale || '',
-                team_id: user.team_id || '',
-                updated_at: user.updated_at || Date.now()
-              }));
-              
-              // Create memberships
-              const memberships: ChannelMembership[] = [];
-              for (const channel of result.conversations) {
-                if (channel.member_ids) {
-                  for (const userId of channel.member_ids) {
-                    memberships.push({
-                      channel_id: channel.id,
-                      user_id: userId,
-                      added_at: Date.now()
-                    });
-                  }
-                }
-              }
-              
-              // Store everything in parallel
-              await Promise.all([
-                dbService.storeChannels(storedChannels),
-                dbService.storeUsers(storedUsers),
-                dbService.storeChannelMemberships(memberships)
-              ]);
-              
-              console.log('Database storage complete');
-              
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Successfully refreshed all Slack data:
-              - ${storedChannels.length} conversations (channels/DMs)
-              - ${storedUsers.length} unique users
-              - ${memberships.length} memberships`
-                  }
-                ]
-              };
-            }
-
-            case 'get_slack_users': {
-              const users = await dbService.getUsers();
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify(users, null, 2)
-                  }
-                ]
-              };
-            }
-
-            case 'get_channel_members': {
-              const { channel_id } = args as any;
-              const members = await dbService.getChannelMembers(channel_id);
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify(members, null, 2)
-                  }
-                ]
-              };
-            }
-
-            case 'get_channel_messages': {
-              const { token, channel } = getTokenAndChannel(args);
-              console.log(`Fetching messages from channel: ${channel}`);
-              const result = await fetchLatestMessagesFromChannel(token, channel);
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result, null, 2)
-                  }
-                ]
-              };
-            }
-
-            case 'get_thread_replies': {
-              const { token, channel } = getTokenAndChannel(args);
-              const { thread_ts, limit = 50 } = args as any;
-              console.log(`Fetching thread replies from ${channel}, thread: ${thread_ts}`);
-              const result = await fetchThreadReplies(token, channel, thread_ts, limit);
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result, null, 2)
-                  }
-                ]
-              };
-            }
-
-            case 'send_slack_message': {
-              const { token, channel } = getTokenAndChannel(args);
-              const { text, thread_ts, reply_broadcast, unfurl_links, unfurl_media } = args as any;
-              
-              console.log(`Sending message to: ${channel}`);
-              
-              let targetChannel = channel;
-              
-              // Check if the channel looks like a user ID (starts with U)
-              if (channel && channel.startsWith('U')) {
-                console.log('User ID detected, finding DM channel...');
-                // It's a user ID, find the DM channel from our stored data
-                const channelsWithMembers = await dbService.getChannelsWithMembers();
-                const dmChannel = channelsWithMembers.find(c => 
-                  c.type === 'im' && c.members.some(m => m.id === channel)
-                );
-                
-                if (!dmChannel) {
-                  throw new Error(`No DM channel found with user ${channel}. Try running refresh_all_slack_data first, or use the actual DM channel ID.`);
-                }
-                
-                targetChannel = dmChannel.id;
-                console.log(`Found DM channel: ${targetChannel}`);
-              }
-              
-              const result = await sendMessage(token, targetChannel, text, {
-                thread_ts,
-                reply_broadcast,
-                unfurl_links,
-                unfurl_media
-              });
-              
-              console.log('Message sent successfully');
-              
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify(result, null, 2)
-                  }
-                ]
-              };
-            }
-
-            default:
-              throw new Error(`Unknown tool: ${name}`);
-          }
+          id: null
         });
-
-        console.log(`MCP Tool completed: ${name}`);
-        return result;
-
-      } catch (error) {
-        console.error(`MCP Tool error for ${name}:`, error);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`
-            }
-          ],
-          isError: true
-        };
       }
-    });
-
-    // RESOURCES handler
-    requestServer.setRequestHandler(ListResourcesRequestSchema, async () => {
-      console.log('Resources/list request');
-      return {
-        resources: [
-          {
-            uri: 'slack://api-documentation',
-            name: 'Slack API Documentation',
-            description: 'Comprehensive guide to Slack Web API endpoints and best practices',
-            mimeType: 'text/markdown'
-          },
-          {
-            uri: 'slack://rate-limits',
-            name: 'Slack API Rate Limits',
-            description: 'Current rate limiting information for Slack API calls',
-            mimeType: 'application/json'
-          },
-          {
-            uri: 'slack://message-formatting',
-            name: 'Slack Message Formatting Guide',
-            description: 'How to format messages, use blocks, and create rich content',
-            mimeType: 'text/markdown'
-          }
-        ]
-      };
-    });
-
-    // Create a fresh transport for this request
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    });
+    }
+  } 
+  else {
+    console.log('Handling ongoing request - using existing session');
     
-    // Connect the fresh server to the fresh transport
-    await requestServer.connect(transport);
+    // For existing sessions, get the ID from the header
+    const sessionId = req.headers['mcp-session-id'] as string;
+    console.log(`Looking for session: ${sessionId}`);
     
-    console.log('Handling request with fresh server and transport...');
+    // Look up the transport for this session
+    const transport = transports[sessionId];
     
-    await transport.handleRequest(req, res, req.body);
-    
-    console.log('Request handled successfully');
-    
-    res.on('error', (error) => {
-      console.error('Response error:', error);
-    });
-    
-  } catch (error) {
-    console.error('MCP transport error:', error);
-    console.error('Error stack:', error.stack);
-    
-    // Send proper JSON-RPC error response
-    if (!res.headersSent) {
-      res.status(500).json({
+    if (!transport) {
+      console.error(`Session not found: ${sessionId}`);
+      return res.status(404).json({
         jsonrpc: '2.0',
         error: { 
-          code: -32603, 
-          message: 'Internal server error',
-          data: error.message
+          code: -32001, 
+          message: 'Session not found' 
         },
         id: null
       });
     }
+    
+    console.log(`Using existing session: ${sessionId}`);
+    
+    try {
+      // Handle the request using the existing transport
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error('Error handling request:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { 
+            code: -32603, 
+            message: 'Request handling failed',
+            data: error.message
+          },
+          id: null
+        });
+      }
+    }
   }
 });
+
+// Don't forget cleanup when sessions end
+app.delete('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'] as string;
+  
+  console.log(`Cleanup request for session: ${sessionId}`);
+  
+  if (transports[sessionId]) {
+    // Clean up the session
+    delete transports[sessionId];
+    console.log(`Cleaned up session: ${sessionId}`);
+    res.status(204).end();
+  } else {
+    console.error(`Session not found for cleanup: ${sessionId}`);
+    res.status(404).json({ 
+      error: 'Session not found' 
+    });
+  }
+});
+
+// Periodic cleanup of old sessions (every 30 minutes)
+setInterval(() => {
+  const sessionCount = Object.keys(transports).length;
+  console.log(`Session cleanup check - ${sessionCount} active sessions`);
+  // Note: In a production environment, you'd want to track session timestamps
+  // and clean up sessions that haven't been used for a certain period
+}, 30 * 60 * 1000);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
