@@ -991,13 +991,10 @@ app.use('/mcp', (req, res, next) => {
   next();
 });
 
-// Create transport once and reuse
+// Create a single transport instance but don't connect yet
 const transport = new StreamableHTTPServerTransport({
   sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
 });
-
-// Connect server to transport once at startup
-server.connect(transport);
 
 // MCP endpoint using SDK transport
 app.post('/mcp', async (req, res) => {
@@ -1009,6 +1006,13 @@ app.post('/mcp', async (req, res) => {
   res.setTimeout(25000); // 25 second response timeout
   
   try {
+    // Check if server is already connected to transport
+    if (!(server as any)._transport) {
+      // Connect server to transport only if not already connected
+      await server.connect(transport);
+      console.log('Server connected to transport');
+    }
+    
     await transport.handleRequest(req, res, req.body);
     
     res.on('error', (error) => {
