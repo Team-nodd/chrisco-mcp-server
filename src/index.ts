@@ -585,6 +585,96 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+// Debug endpoint to check database contents
+app.get('/debug', async (req, res) => {
+  try {
+    const result: any = {
+      timestamp: new Date().toISOString(),
+      database: {}
+    };
+
+    // Check tokens
+    try {
+      const tokens = await dbService.getAllTokens();
+      result.database.tokens = {
+        count: tokens.length,
+        active_count: tokens.filter(t => t.is_active).length,
+        tokens: tokens.map(t => ({
+          id: t.id,
+          team_name: t.team_name,
+          team_id: t.team_id,
+          user_name: t.user_name,
+          user_id: t.user_id,
+          is_active: t.is_active,
+          created_at: new Date(t.created_at).toISOString(),
+          updated_at: new Date(t.updated_at).toISOString(),
+          token_preview: t.access_token.substring(0, 20) + '...'
+        }))
+      };
+    } catch (error) {
+      result.database.tokens = { error: error.message };
+    }
+
+    // Check channels
+    try {
+      const channels = await dbService.getChannels();
+      result.database.channels = {
+        count: channels.length,
+        sample: channels.slice(0, 5).map(c => ({
+          id: c.id,
+          name: c.name,
+          type: c.type,
+          is_private: c.is_private
+        }))
+      };
+    } catch (error) {
+      result.database.channels = { error: error.message };
+    }
+
+    // Check users
+    try {
+      const users = await dbService.getUsers();
+      result.database.users = {
+        count: users.length,
+        sample: users.slice(0, 5).map(u => ({
+          id: u.id,
+          name: u.name,
+          real_name: u.real_name,
+          is_bot: u.is_bot
+        }))
+      };
+    } catch (error) {
+      result.database.users = { error: error.message };
+    }
+
+    // Check DM conversations
+    try {
+      const dms = await dbService.getAllDMs();
+      result.database.dms = {
+        count: dms.length,
+        conversations: dms.map(dm => ({
+          id: dm.id,
+          type: dm.type,
+          user_name: dm.user_name,
+          user_id: dm.user_id,
+          priority: dm.priority,
+          is_open: dm.is_open
+        }))
+      };
+    } catch (error) {
+      result.database.dms = { error: error.message };
+    }
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      error: 'Database check failed',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Homepage - Slack OAuth Authorization
 app.get('/', (req, res) => {
   const clientId = process.env.SLACK_CLIENT_ID;
