@@ -1017,10 +1017,7 @@ app.use('/mcp', (req, res, next) => {
   next();
 });
 
-// Store all active transports by session ID
-const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
-
-// MCP endpoint with proper session management
+// MCP endpoint with stateless transport (no session management)
 app.post('/mcp', async (req, res) => {
   const timestamp = new Date().toISOString();
   const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -1035,155 +1032,49 @@ app.post('/mcp', async (req, res) => {
   req.setTimeout(25000); // 25 second request timeout
   res.setTimeout(25000); // 25 second response timeout
   
-  // Check if this is an initial connection request
-  const isInitRequest = req.body && req.body.method === 'initialize';
-  console.log(`Request type: ${isInitRequest ? 'INITIALIZE' : 'ONGOING'}`);
-
-  if (isInitRequest) {
-    console.log(`🚀 [${requestId}] Handling initialize request - creating new session`);
+  console.log(`🚀 [${requestId}] Handling stateless MCP request`);
+  
+  try {
+    console.log(`🔧 [${requestId}] Creating stateless StreamableHTTPServerTransport...`);
     
-    // For new sessions, generate a unique ID
-    const sessionId = uuidv4();
-    console.log(`📝 [${requestId}] Generated session ID: ${sessionId}`);
+    // Create a stateless transport for this request
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined
+    });
     
-    try {
-      console.log(`🔧 [${requestId}] Creating StreamableHTTPServerTransport...`);
-      
-      // Create a transport for this session
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => sessionId
-      });
-      
-      console.log(`🔗 [${requestId}] Connecting server to transport...`);
-      
-      // Connect the main server to this transport
-      await server.connect(transport);
-      
-      console.log(`💾 [${requestId}] Storing transport in session map`);
-      
-      // Store it for future requests 
-      transports[sessionId] = transport;
-      
-      console.log(`📊 [${requestId}] Current active sessions: ${Object.keys(transports).length}`);
-      console.log(`📋 [${requestId}] Session IDs: [${Object.keys(transports).join(', ')}]`);
-      
-      // Tell LLM application the session ID
-      res.setHeader('Mcp-Session-Id', sessionId);
-      console.log(`✅ [${requestId}] Created new session: ${sessionId}`);
-      
-      console.log(`🎯 [${requestId}] Handling initialize request via transport...`);
-      
-      // Handle the initialize request
-      await transport.handleRequest(req, res, req.body);
-      
-      console.log(`✨ [${requestId}] Initialize request completed successfully`);
-      
-    } catch (error) {
-      console.error(`❌ [${requestId}] Error creating session:`, error);
-      console.error(`❌ [${requestId}] Error stack:`, error.stack);
-      
-      if (!res.headersSent) {
-        res.status(500).json({
-          jsonrpc: '2.0',
-          error: { 
-            code: -32603, 
-            message: 'Failed to create session',
-            data: error.message
-          },
-          id: null
-        });
-      }
-    }
-  } 
-  else {
-    console.log(`🔄 [${requestId}] Handling ongoing request - using existing session`);
+    console.log(`🔗 [${requestId}] Connecting server to transport...`);
     
-    // For existing sessions, get the ID from the header
-    const sessionId = req.headers['mcp-session-id'] as string;
-    console.log(`🔍 [${requestId}] Looking for session: ${sessionId}`);
-    console.log(`📊 [${requestId}] Available sessions: [${Object.keys(transports).join(', ')}]`);
+    // Connect the main server to this transport
+    await server.connect(transport);
     
-    // Look up the transport for this session
-    const transport = transports[sessionId];
+    console.log(`🎯 [${requestId}] Handling request via transport...`);
     
-    if (!transport) {
-      console.error(`❌ [${requestId}] Session not found: ${sessionId}`);
-      console.error(`❌ [${requestId}] Available sessions: [${Object.keys(transports).join(', ')}]`);
-      
-      return res.status(404).json({
+    // Handle the request
+    await transport.handleRequest(req, res, req.body);
+    
+    console.log(`✨ [${requestId}] Request completed successfully`);
+    
+  } catch (error) {
+    console.error(`❌ [${requestId}] Error handling request:`, error);
+    console.error(`❌ [${requestId}] Error stack:`, error.stack);
+    
+    if (!res.headersSent) {
+      res.status(500).json({
         jsonrpc: '2.0',
         error: { 
-          code: -32001, 
-          message: 'Session not found' 
+          code: -32603, 
+          message: 'Request handling failed',
+          data: error.message
         },
         id: null
       });
-    }
-    
-    console.log(`✅ [${requestId}] Found existing session: ${sessionId}`);
-    
-    try {
-      console.log(`🎯 [${requestId}] Handling request via existing transport...`);
-      
-      // Handle the request using the existing transport
-      await transport.handleRequest(req, res, req.body);
-      
-      console.log(`✨ [${requestId}] Request completed successfully`);
-      
-    } catch (error) {
-      console.error(`❌ [${requestId}] Error handling request:`, error);
-      console.error(`❌ [${requestId}] Error stack:`, error.stack);
-      
-      if (!res.headersSent) {
-        res.status(500).json({
-          jsonrpc: '2.0',
-          error: { 
-            code: -32603, 
-            message: 'Request handling failed',
-            data: error.message
-          },
-          id: null
-        });
-      }
     }
   }
   
   console.log(`=== [${new Date().toISOString()}] MCP REQUEST END [${requestId}] ===\n`);
 });
 
-// Don't forget cleanup when sessions end
-app.delete('/mcp', async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'] as string;
-  const timestamp = new Date().toISOString();
-  
-  console.log(`\n🧹 [${timestamp}] CLEANUP REQUEST for session: ${sessionId}`);
-  console.log(`🧹 Available sessions before cleanup: [${Object.keys(transports).join(', ')}]`);
-  
-  if (transports[sessionId]) {
-    // Clean up the session
-    delete transports[sessionId];
-    console.log(`✅ 🧹 Cleaned up session: ${sessionId}`);
-    console.log(`📊 🧹 Remaining sessions: ${Object.keys(transports).length} [${Object.keys(transports).join(', ')}]`);
-    res.status(204).end();
-  } else {
-    console.error(`❌ 🧹 Session not found for cleanup: ${sessionId}`);
-    console.error(`❌ 🧹 Available sessions: [${Object.keys(transports).join(', ')}]`);
-    res.status(404).json({ 
-      error: 'Session not found' 
-    });
-  }
-});
-
-// Periodic cleanup of old sessions (every 30 minutes)
-setInterval(() => {
-  const sessionCount = Object.keys(transports).length;
-  const timestamp = new Date().toISOString();
-  console.log(`\n⏰ [${timestamp}] PERIODIC SESSION CLEANUP CHECK`);
-  console.log(`📊 ⏰ Active sessions: ${sessionCount}`);
-  console.log(`📋 ⏰ Session IDs: [${Object.keys(transports).join(', ')}]`);
-  // Note: In a production environment, you'd want to track session timestamps
-  // and clean up sessions that haven't been used for a certain period
-}, 30 * 60 * 1000);
+// No session cleanup needed in stateless mode
 
 // Health check endpoint
 app.get('/health', (req, res) => {
