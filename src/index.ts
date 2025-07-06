@@ -991,6 +991,14 @@ app.use('/mcp', (req, res, next) => {
   next();
 });
 
+// Create transport once and reuse
+const transport = new StreamableHTTPServerTransport({
+  sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+});
+
+// Connect server to transport once at startup
+server.connect(transport);
+
 // MCP endpoint using SDK transport
 app.post('/mcp', async (req, res) => {
   console.log('MCP request received:', req.method, req.url);
@@ -1001,16 +1009,7 @@ app.post('/mcp', async (req, res) => {
   res.setTimeout(25000); // 25 second response timeout
   
   try {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    });
-    
-    await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
-    
-    res.on('close', () => {
-      server.close();
-    });
     
     res.on('error', (error) => {
       console.error('Response error:', error);
