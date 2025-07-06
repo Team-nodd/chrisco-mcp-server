@@ -203,59 +203,37 @@ class DatabaseService {
     
     const all = promisify(this.db.all.bind(this.db));
     
-    // Get channels with their members in one query
-    const result = await all(`
-      SELECT 
-        c.*,
-        GROUP_CONCAT(
-          json_object(
-            'id', u.id,
-            'name', u.name,
-            'real_name', u.real_name,
-            'display_name', u.display_name
-          )
-        ) as members_json
-      FROM channels c
-      LEFT JOIN channel_memberships cm ON c.id = cm.channel_id
-      LEFT JOIN users u ON cm.user_id = u.id AND u.is_deleted = 0
-      GROUP BY c.id
-      ORDER BY c.name
-    `);
+    // Get all channels first
+    const channels = await all('SELECT * FROM channels ORDER BY name');
     
-    // Parse the JSON members for each channel
-    return result.map((row: any) => {
-      let members = [];
-      if (row.members_json) {
-        try {
-          // Split the GROUP_CONCAT result and parse each JSON object
-          const memberJsonStrings = row.members_json.split(',');
-          members = memberJsonStrings.map((jsonStr: string) => {
-            try {
-              return JSON.parse(jsonStr);
-            } catch {
-              return null;
-            }
-          }).filter(Boolean);
-        } catch (error) {
-          console.error('Error parsing members JSON:', error);
-          members = [];
-        }
-      }
-      
-      return {
-        id: row.id,
-        name: row.name,
-        type: row.type,
-        is_private: row.is_private,
-        is_archived: row.is_archived,
-        topic: row.topic,
-        purpose: row.purpose,
-        num_members: row.num_members,
-        created: row.created,
-        updated_at: row.updated_at,
-        members: members
-      };
-    });
+    // For each channel, get its members
+    const channelsWithMembers = await Promise.all(
+      channels.map(async (channel: any) => {
+        const members = await all(`
+          SELECT u.id, u.name, u.real_name, u.display_name 
+          FROM users u
+          JOIN channel_memberships cm ON u.id = cm.user_id
+          WHERE cm.channel_id = ? AND u.is_deleted = 0
+          ORDER BY u.name
+        `, [channel.id]);
+        
+        return {
+          id: channel.id,
+          name: channel.name,
+          type: channel.type,
+          is_private: channel.is_private,
+          is_archived: channel.is_archived,
+          topic: channel.topic,
+          purpose: channel.purpose,
+          num_members: channel.num_members,
+          created: channel.created,
+          updated_at: channel.updated_at,
+          members: members
+        };
+      })
+    );
+    
+    return channelsWithMembers;
   }
 
   async getUsers(): Promise<StoredUser[]> {
