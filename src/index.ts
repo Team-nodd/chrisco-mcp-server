@@ -1022,9 +1022,14 @@ const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
 
 // MCP endpoint with proper session management
 app.post('/mcp', async (req, res) => {
-  console.log('MCP request received:', req.method, req.url);
-  console.log('Headers:', req.headers);
-  console.log('Body:', JSON.stringify(req.body));
+  const timestamp = new Date().toISOString();
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  console.log(`\n=== [${timestamp}] MCP REQUEST START [${requestId}] ===`);
+  console.log(`Method: ${req.method}`);
+  console.log(`URL: ${req.url}`);
+  console.log(`Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`Body:`, JSON.stringify(req.body, null, 2));
   
   // Set timeouts
   req.setTimeout(25000); // 25 second request timeout
@@ -1032,34 +1037,51 @@ app.post('/mcp', async (req, res) => {
   
   // Check if this is an initial connection request
   const isInitRequest = req.body && req.body.method === 'initialize';
+  console.log(`Request type: ${isInitRequest ? 'INITIALIZE' : 'ONGOING'}`);
 
   if (isInitRequest) {
-    console.log('Handling initialize request - creating new session');
+    console.log(`🚀 [${requestId}] Handling initialize request - creating new session`);
     
     // For new sessions, generate a unique ID
     const sessionId = uuidv4();
+    console.log(`📝 [${requestId}] Generated session ID: ${sessionId}`);
     
     try {
+      console.log(`🔧 [${requestId}] Creating StreamableHTTPServerTransport...`);
+      
       // Create a transport for this session
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => sessionId,
+        sessionIdGenerator: () => sessionId
       });
+      
+      console.log(`🔗 [${requestId}] Connecting server to transport...`);
       
       // Connect the main server to this transport
       await server.connect(transport);
       
+      console.log(`💾 [${requestId}] Storing transport in session map`);
+      
       // Store it for future requests 
       transports[sessionId] = transport;
       
+      console.log(`📊 [${requestId}] Current active sessions: ${Object.keys(transports).length}`);
+      console.log(`📋 [${requestId}] Session IDs: [${Object.keys(transports).join(', ')}]`);
+      
       // Tell LLM application the session ID
       res.setHeader('Mcp-Session-Id', sessionId);
-      console.log(`Created new session: ${sessionId}`);
+      console.log(`✅ [${requestId}] Created new session: ${sessionId}`);
+      
+      console.log(`🎯 [${requestId}] Handling initialize request via transport...`);
       
       // Handle the initialize request
       await transport.handleRequest(req, res, req.body);
       
+      console.log(`✨ [${requestId}] Initialize request completed successfully`);
+      
     } catch (error) {
-      console.error('Error creating session:', error);
+      console.error(`❌ [${requestId}] Error creating session:`, error);
+      console.error(`❌ [${requestId}] Error stack:`, error.stack);
+      
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: '2.0',
@@ -1074,17 +1096,20 @@ app.post('/mcp', async (req, res) => {
     }
   } 
   else {
-    console.log('Handling ongoing request - using existing session');
+    console.log(`🔄 [${requestId}] Handling ongoing request - using existing session`);
     
     // For existing sessions, get the ID from the header
     const sessionId = req.headers['mcp-session-id'] as string;
-    console.log(`Looking for session: ${sessionId}`);
+    console.log(`🔍 [${requestId}] Looking for session: ${sessionId}`);
+    console.log(`📊 [${requestId}] Available sessions: [${Object.keys(transports).join(', ')}]`);
     
     // Look up the transport for this session
     const transport = transports[sessionId];
     
     if (!transport) {
-      console.error(`Session not found: ${sessionId}`);
+      console.error(`❌ [${requestId}] Session not found: ${sessionId}`);
+      console.error(`❌ [${requestId}] Available sessions: [${Object.keys(transports).join(', ')}]`);
+      
       return res.status(404).json({
         jsonrpc: '2.0',
         error: { 
@@ -1095,13 +1120,20 @@ app.post('/mcp', async (req, res) => {
       });
     }
     
-    console.log(`Using existing session: ${sessionId}`);
+    console.log(`✅ [${requestId}] Found existing session: ${sessionId}`);
     
     try {
+      console.log(`🎯 [${requestId}] Handling request via existing transport...`);
+      
       // Handle the request using the existing transport
       await transport.handleRequest(req, res, req.body);
+      
+      console.log(`✨ [${requestId}] Request completed successfully`);
+      
     } catch (error) {
-      console.error('Error handling request:', error);
+      console.error(`❌ [${requestId}] Error handling request:`, error);
+      console.error(`❌ [${requestId}] Error stack:`, error.stack);
+      
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: '2.0',
@@ -1115,21 +1147,27 @@ app.post('/mcp', async (req, res) => {
       }
     }
   }
+  
+  console.log(`=== [${new Date().toISOString()}] MCP REQUEST END [${requestId}] ===\n`);
 });
 
 // Don't forget cleanup when sessions end
 app.delete('/mcp', async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string;
+  const timestamp = new Date().toISOString();
   
-  console.log(`Cleanup request for session: ${sessionId}`);
+  console.log(`\n🧹 [${timestamp}] CLEANUP REQUEST for session: ${sessionId}`);
+  console.log(`🧹 Available sessions before cleanup: [${Object.keys(transports).join(', ')}]`);
   
   if (transports[sessionId]) {
     // Clean up the session
     delete transports[sessionId];
-    console.log(`Cleaned up session: ${sessionId}`);
+    console.log(`✅ 🧹 Cleaned up session: ${sessionId}`);
+    console.log(`📊 🧹 Remaining sessions: ${Object.keys(transports).length} [${Object.keys(transports).join(', ')}]`);
     res.status(204).end();
   } else {
-    console.error(`Session not found for cleanup: ${sessionId}`);
+    console.error(`❌ 🧹 Session not found for cleanup: ${sessionId}`);
+    console.error(`❌ 🧹 Available sessions: [${Object.keys(transports).join(', ')}]`);
     res.status(404).json({ 
       error: 'Session not found' 
     });
@@ -1139,7 +1177,10 @@ app.delete('/mcp', async (req, res) => {
 // Periodic cleanup of old sessions (every 30 minutes)
 setInterval(() => {
   const sessionCount = Object.keys(transports).length;
-  console.log(`Session cleanup check - ${sessionCount} active sessions`);
+  const timestamp = new Date().toISOString();
+  console.log(`\n⏰ [${timestamp}] PERIODIC SESSION CLEANUP CHECK`);
+  console.log(`📊 ⏰ Active sessions: ${sessionCount}`);
+  console.log(`📋 ⏰ Session IDs: [${Object.keys(transports).join(', ')}]`);
   // Note: In a production environment, you'd want to track session timestamps
   // and clean up sessions that haven't been used for a certain period
 }, 30 * 60 * 1000);
