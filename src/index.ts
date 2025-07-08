@@ -97,6 +97,7 @@ app.get('/', (req, res) => {
 
 // List available tools
 app.post('/mcp/list-tools', (req, res) => {
+  console.log('List tools endpoint called');
   res.json({
     tools: [
       {
