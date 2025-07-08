@@ -1,114 +1,80 @@
+#!/usr/bin/env node
+
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  InitializeRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import cors from 'cors';
-import { getCustomers, createCustomer, getCustomerById } from './supabaseAPI.js';
-import { getProducts, getProductById, createProduct } from './supabaseAPI.js';
-import { getOrders, getOrderById, createOrder } from './supabaseAPI.js';
-
+import {
+  getCustomers,
+  createCustomer,
+  getCustomerById,
+  getProducts,
+  getProductById,
+  createProduct,
+  getOrders,
+  getOrderById,
+  createOrder
+} from './supabaseAPI.js';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-app.use(cors());
+// Improve connection handling
+app.use((req, res, next) => {
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Keep-Alive', 'timeout=30, max=100');
+  next();
+});
+
+// Enable CORS and JSON parsing
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id'],
+}));
 app.use(express.json());
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
-
-// --- Customer Management ---
-app.get('/customers', async (req, res) => {
-  try {
-    const customers = await getCustomers();
-    res.json(customers);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// Create the MCP server
+const server = new Server(
+  {
+    name: 'supabase-mcp-server',
+    version: '1.0.0',
+  },
+  {
+    capabilities: {
+      tools: {
+        listChanged: false
+      }
+    },
   }
+);
+
+// INITIALIZATION - Handle MCP initialization
+server.setRequestHandler(InitializeRequestSchema, async (request) => {
+  console.log('Initialize request received:', JSON.stringify(request));
+  return {
+    protocolVersion: '2024-11-05',
+    capabilities: {
+      tools: {
+        listChanged: false
+      }
+    },
+    serverInfo: {
+      name: 'supabase-mcp-server',
+      version: '1.0.0'
+    }
+  };
 });
 
-app.get('/customers/:id', async (req, res) => {
-  try {
-    const customer = await getCustomerById(req.params.id);
-    res.json(customer);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/customers', async (req, res) => {
-  try {
-    const newCustomer = await createCustomer(req.body);
-    res.status(201).json(newCustomer);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- Product Management ---
-app.get('/products', async (req, res) => {
-  try {
-    const products = await getProducts();
-    res.json(products);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/products/:id', async (req, res) => {
-  try {
-    const product = await getProductById(req.params.id);
-    res.json(product);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- Order Management ---
-app.get('/orders', async (req, res) => {
-  try {
-    const orders = await getOrders();
-    res.json(orders);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/orders/:id', async (req, res) => {
-  try {
-    const order = await getOrderById(req.params.id);
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/orders', async (req, res) => {
-  try {
-    const newOrder = await createOrder(req.body);
-    res.status(201).json(newOrder);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- Root ---
-app.get('/', (req, res) => {
-  res.send('Welcome to the MCP Supabase API server!');
-});
-
-// MCP base endpoint handlers for GET and POST
-app.get('/mcp', (req, res) => {
-  res.send('MCP endpoint. Use /mcp/list-tools or /mcp/call-tool.');
-});
-
-app.post('/mcp', (req, res) => {
-  res.send('MCP endpoint. Use /mcp/list-tools or /mcp/call-tool.');
-});
-
-// List available tools
-app.post('/mcp/list-tools', (req, res) => {
-  console.log('List tools endpoint called');
-  res.json({
+// TOOLS - Supabase integration functions
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  console.log('Tools/list request - sending Supabase tool definitions');
+  return {
     tools: [
       {
         name: 'get_customers',
@@ -122,50 +88,121 @@ app.post('/mcp/list-tools', (req, res) => {
           type: 'object',
           properties: {
             name: { type: 'string' },
-            // ...other customer fields
+            // ...add other customer fields as needed
           },
           required: ['name']
         }
       },
-      // ...add more tools for products, orders, etc.
+      {
+        name: 'get_products',
+        description: 'Retrieve all products.',
+        inputSchema: { type: 'object', properties: {}, required: [] }
+      },
+      {
+        name: 'create_product',
+        description: 'Create a new product.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            // ...add other product fields as needed
+          },
+          required: ['name']
+        }
+      },
+      {
+        name: 'get_orders',
+        description: 'Retrieve all orders.',
+        inputSchema: { type: 'object', properties: {}, required: [] }
+      },
+      {
+        name: 'create_order',
+        description: 'Create a new order.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            // ...add order fields as needed
+          },
+          required: []
+        }
+      },
+      // ...add more tools for your API as needed
     ]
-  });
+  };
 });
 
-// Handle tool calls
-app.post('/mcp/call-tool', async (req, res) => {
-  const { name, arguments: args } = req.body;
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
   try {
-    let result;
     switch (name) {
       case 'get_customers':
-        result = await getCustomers();
-        break;
+        return { content: [{ type: 'json', data: await getCustomers() }] };
       case 'create_customer':
-        result = await createCustomer(args);
-        break;
-      // ...other cases
+        return { content: [{ type: 'json', data: await createCustomer(args) }] };
+      case 'get_products':
+        return { content: [{ type: 'json', data: await getProducts() }] };
+      case 'create_product':
+        return { content: [{ type: 'json', data: await createProduct(args) }] };
+      case 'get_orders':
+        return { content: [{ type: 'json', data: await getOrders() }] };
+      case 'create_order':
+        return { content: [{ type: 'json', data: await createOrder(args) }] };
+      // ...add more cases for your tools
       default:
-        throw new Error('Unknown tool');
+        throw new Error(`Unknown tool: ${name}`);
     }
-    res.json({ content: [{ type: 'json', data: result }] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`
+        }
+      ],
+      isError: true
+    };
   }
 });
 
-// Optional: Dummy handler for OAuth discovery
-app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  res.status(200).json({ message: 'OAuth not implemented.' });
+// MCP endpoint with stateless transport (no session management)
+app.post('/mcp', async (req, res) => {
+  const timestamp = new Date().toISOString();
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  console.log(`\n=== [${timestamp}] MCP REQUEST START [${requestId}] ===`);
+  console.log(`Method: ${req.method}`);
+  console.log(`URL: ${req.url}`);
+  console.log(`Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`Body:`, JSON.stringify(req.body, null, 2));
+  req.setTimeout(25000);
+  res.setTimeout(25000);
+  console.log(`🚀 [${requestId}] Handling stateless MCP request`);
+  try {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    console.log(`✨ [${requestId}] Request completed successfully`);
+  } catch (error) {
+    console.error(`❌ [${requestId}] Error handling request:`, error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: '2.0',
+        error: { code: -32603, message: 'Request handling failed', data: error.message },
+        id: null
+      });
+    }
+  }
+  console.log(`=== [${new Date().toISOString()}] MCP REQUEST END [${requestId}] ===\n`);
 });
 
-// Optional: Dummy handler for /register
-app.get('/register', (req, res) => {
-  res.status(200).json({ message: 'Registration not implemented.' });
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 MCP Supabase API Server running on port ${PORT}`);
+  console.log(`🚀 Supabase MCP Server running on port ${PORT}`);
+  console.log(`📡 MCP endpoint: http://localhost:${PORT}/mcp`);
+  console.log(`❤️ Health check: http://localhost:${PORT}/health`);
 });
 
 
