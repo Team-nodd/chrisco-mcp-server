@@ -105,10 +105,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: 'object',
           properties: {
-            name: { type: 'string' },
-            // ...add other customer fields as needed
+            first_name: { type: 'string' },
+            last_name: { type: 'string' },
+            date_of_birth: { type: 'string' },
+            street_address: { type: 'string' },
+            suburb: { type: 'string' },
+            state: { type: 'string' },
+            postcode: { type: 'string' },
+            day_phone: { type: 'string' },
+            evening_phone: { type: 'string' },
+            mobile_phone: { type: 'string' },
+            member_name: { type: 'string' },
+            member_number: { type: 'string' },
+            join_date: { type: 'string' },
+            correspondence_preference: { type: 'string' }, 
+            email: { type: 'string' },
+            postal_address: { type: 'string' },
+            title: { type: 'string' },
+            full_name: { type: 'string' },
+            phone: { type: 'string' },
           },
-          required: ['name']
+          required: ['first_name', 'last_name', 'date_of_birth', 'street_address', 'suburb', 'postcode', 'phone', 'phone', 'mobile_phone', 'member_number', 'join_date', 'email', 'postal_address', 'title', ]
         }
       },
       {
@@ -134,9 +151,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             name: { type: 'string' },
-            // ...add other product fields as needed
+            description: { type: 'string' },
+            price: { type: 'number' }, 
+            sku: { type: 'string' },
+            stock_quantity: { type: 'number' },
+            is_active: { type: 'boolean' }, 
           },
-          required: ['name']
+          required: ['name', 'description', 'price', 'sku', 'stock_quantity']
         }
       },
       {
@@ -158,13 +179,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'create_order',
-        description: 'Create a new order.',
+        description: `Create a new order. Required fields: customer_id (existing customer), product_id (selected product), item_description, quantity, total_amount, amount_paid, payment_method_id (selected payment method).\n\nAuto-generated: payment_id is created automatically.\n\nThe delivery_address is constructed from the customer's address details (street, suburb, state, postcode).`,
         inputSchema: {
           type: 'object',
           properties: {
-            // ...add order fields as needed
+            customer_id: { type: 'string', description: 'Reference to an existing customer' },
+            product_id: { type: 'string', description: 'Reference to the selected product' },
+            item_description: { type: 'string' },
+            quantity: { type: 'number' },
+            total_amount: { type: 'number' },
+            amount_paid: { type: 'number' },
+            payment_method_id: { type: 'string', description: 'Reference to the selected payment method' }
           },
-          required: []
+          required: ['customer_id', 'product_id', 'item_description', 'quantity', 'total_amount', 'amount_paid', 'payment_method_id']
+        }
+      },
+      {
+        name: 'create_payment_method',
+        description: 'Create a new payment method. Required fields: method_type (e.g., Credit Card, Debit Card, etc.), masked_card_number (last four digits only, e.g., "**** **** **** 1234").',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            method_type: { type: 'string', description: 'e.g., Credit Card, Debit Card, etc.' },
+            masked_card_number: { type: 'string', description: 'Last four digits only, e.g., "**** **** **** 1234"' }
+          },
+          required: ['method_type', 'masked_card_number']
         }
       },
       {
