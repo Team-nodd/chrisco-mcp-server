@@ -18,7 +18,14 @@ import {
   createProduct,
   getOrders,
   getOrderById,
-  createOrder
+  createOrder,
+  changeDeliveryAddress,
+  verifyDeliveryAddress,
+  getOrderOutstandingAmount,
+  getNextPaymentInfo,
+  getHeadStartPlanStatus,
+  skipNextPayment,
+  getPaymentMethod
 } from './supabaseAPI.js';
 
 const app = express();
@@ -126,6 +133,84 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: []
         }
       },
+      {
+        name: 'change_delivery_address',
+        description: 'Change the delivery address for an order.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            order_id: { type: 'string' },
+            new_address: { type: 'string' }
+          },
+          required: ['order_id', 'new_address']
+        }
+      },
+      {
+        name: 'verify_delivery_address',
+        description: 'Verify the postal or delivery address for an order.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            order_id: { type: 'string' }
+          },
+          required: ['order_id']
+        }
+      },
+      {
+        name: 'get_order_outstanding_amount',
+        description: 'Get the outstanding amount or amount paid for an order.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            order_id: { type: 'string' }
+          },
+          required: ['order_id']
+        }
+      },
+      {
+        name: 'get_next_payment_info',
+        description: 'Get the next payment date and payment frequency for an order.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            order_id: { type: 'string' }
+          },
+          required: ['order_id']
+        }
+      },
+      {
+        name: 'get_headstart_plan_status',
+        description: 'Get the paid amount and projected value of the HeadStart plan.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            customer_id: { type: 'string' }
+          },
+          required: ['customer_id']
+        }
+      },
+      {
+        name: 'skip_next_payment',
+        description: 'Skip the next payment and see the new payment schedule.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            order_id: { type: 'string' }
+          },
+          required: ['order_id']
+        }
+      },
+      {
+        name: 'get_payment_method',
+        description: 'Check how an order is being paid and get account details.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            order_id: { type: 'string' }
+          },
+          required: ['order_id']
+        }
+      },
       // ...add more tools for your API as needed
     ]
   };
@@ -149,6 +234,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       switch (name) {
         case 'get_customers':
           return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(), null, 2) }] };
+        
         case 'create_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await createCustomer(args), null, 2) }] };
         case 'get_products':
@@ -159,6 +245,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text', text: JSON.stringify(await getOrders(), null, 2) }] };
         case 'create_order':
           return { content: [{ type: 'text', text: JSON.stringify(await createOrder(args), null, 2) }] };
+        case 'change_delivery_address':
+          return { content: [{ type: 'text', text: JSON.stringify(await changeDeliveryAddress(args.order_id, args.new_address), null, 2) }] };
+        case 'verify_delivery_address':
+          return { content: [{ type: 'text', text: JSON.stringify(await verifyDeliveryAddress(args.order_id), null, 2) }] };
+        case 'get_order_outstanding_amount':
+          return { content: [{ type: 'text', text: JSON.stringify(await getOrderOutstandingAmount(args.order_id), null, 2) }] };
+        case 'get_next_payment_info':
+          return { content: [{ type: 'text', text: JSON.stringify(await getNextPaymentInfo(args.order_id), null, 2) }] };
+        case 'get_headstart_plan_status':
+          return { content: [{ type: 'text', text: JSON.stringify(await getHeadStartPlanStatus(args.customer_id), null, 2) }] };
+        case 'skip_next_payment':
+          return { content: [{ type: 'text', text: JSON.stringify(await skipNextPayment(args.order_id), null, 2) }] };
+        case 'get_payment_method':
+          return { content: [{ type: 'text', text: JSON.stringify(await getPaymentMethod(args.order_id), null, 2) }] };
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
