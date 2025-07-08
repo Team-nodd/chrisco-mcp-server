@@ -148,17 +148,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await executeWithTimeout(async () => {
       switch (name) {
         case 'get_customers':
-          return { content: [{ type: 'json', data: await getCustomers() }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(), null, 2) }] };
         case 'create_customer':
-          return { content: [{ type: 'json', data: await createCustomer(args) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await createCustomer(args), null, 2) }] };
         case 'get_products':
-          return { content: [{ type: 'json', data: await getProducts() }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await getProducts(), null, 2) }] };
         case 'create_product':
-          return { content: [{ type: 'json', data: await createProduct(args) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await createProduct(args), null, 2) }] };
         case 'get_orders':
-          return { content: [{ type: 'json', data: await getOrders() }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await getOrders(), null, 2) }] };
         case 'create_order':
-          return { content: [{ type: 'json', data: await createOrder(args) }] };  
+          return { content: [{ type: 'text', text: JSON.stringify(await createOrder(args), null, 2) }] };
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
