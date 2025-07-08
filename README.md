@@ -6,6 +6,7 @@ Enterprise-grade Model Context Protocol (MCP) server for Slack integration with 
 
 ## Overview
 
+
 This MCP server provides comprehensive Slack workspace integration through Claude.ai, enabling:
 - **Channel Management**: List and explore accessible Slack channels
 - **Message Retrieval**: Fetch latest messages with threaded replies
