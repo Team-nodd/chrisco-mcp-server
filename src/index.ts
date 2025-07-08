@@ -133,29 +133,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  const executeWithTimeout = async (operation: () => Promise<any>, timeoutMs = 30000) => {
+    return Promise.race([
+      operation(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Operation timed out after 30 seconds')), timeoutMs)
+      )
+    ]);
+  };
+
   try {
-    switch (name) {
-      case 'get_customers':
-        return { content: [{ type: 'json', data: await getCustomers() }] };
-      case 'create_customer':
-        return { content: [{ type: 'json', data: await createCustomer(args) }] };
-      case 'get_products':
-        return { content: [{ type: 'json', data: await getProducts() }] };
-      case 'create_product':
-        return { content: [{ type: 'json', data: await createProduct(args) }] };
-      case 'get_orders':
-        return { content: [{ type: 'json', data: await getOrders() }] };
-      case 'create_order':
-        return { content: [{ type: 'json', data: await createOrder(args) }] };
-      // ...add more cases for your tools
-      default:
-        throw new Error(`Unknown tool: ${name}`);
-    }
+    console.log(`MCP Tool called: ${name}`, JSON.stringify(args));
+    const result = await executeWithTimeout(async () => {
+      switch (name) {
+        case 'get_customers':
+          return { content: [{ type: 'json', data: await getCustomers() }] };
+        case 'create_customer':
+          return { content: [{ type: 'json', data: await createCustomer(args) }] };
+        case 'get_products':
+          return { content: [{ type: 'json', data: await getProducts() }] };
+        case 'create_product':
+          return { content: [{ type: 'json', data: await createProduct(args) }] };
+        case 'get_orders':
+          return { content: [{ type: 'json', data: await getOrders() }] };
+        case 'create_order':
+          return { content: [{ type: 'json', data: await createOrder(args) }] };  
+        default:
+          throw new Error(`Unknown tool: ${name}`);
+      }
+    });
+    console.log(`Tool result:`, JSON.stringify(result, null, 2));
+    return result;  
   } catch (error) {
+    console.error(`Error in tool call: ${name}`, error);
     return {
       content: [
         {
-          type: 'text',
+          type: 'text',   
           text: `Error: ${error instanceof Error ? error.message : String(error)}`
         }
       ],
@@ -163,6 +178,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 });
+
+// MCP endpoint with stateless transport (no session management)
+app.post('/mcp', async (req, res) => {
+  const timestamp = new Date().toISOString();
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  console.log(`\n=== [${timestamp}] MCP REQUEST START [${requestId}] ===`);
+  console.log(`Method: ${req.method}`);
+  console.log(`URL: ${req.url}`);
+  console.log(`Headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`Body:`, JSON.stringify(req.body, null, 2));
+  req.setTimeout(25000);
+  res.setTimeout(25000);
+  console.log(`🚀 [${requestId}] Handling stateless MCP request`);
+  try {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    console.log(`✨ [${requestId}] Request completed successfully`);
+  } catch (error) {
+    console.error(`❌ [${requestId}] Error handling request:`, error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: '2.0',
+        error: { code: -32603, message: 'Request handling failed', data: error.message },
+        id: null
+      });
+    }
+  }
+  console.log(`=== [${new Date().toISOString()}] MCP REQUEST END [${requestId}] ===\n`);
+});
+   
 
 // MCP endpoint with stateless transport (no session management)
 app.post('/mcp', async (req, res) => {
