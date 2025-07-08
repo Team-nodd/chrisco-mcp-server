@@ -154,6 +154,16 @@ app.post('/mcp/call-tool', async (req, res) => {
   }
 });
 
+// Optional: Dummy handler for OAuth discovery
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  res.status(200).json({ message: 'OAuth not implemented.' });
+});
+
+// Optional: Dummy handler for /register
+app.get('/register', (req, res) => {
+  res.status(200).json({ message: 'Registration not implemented.' });
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 MCP Supabase API Server running on port ${PORT}`);
 });
