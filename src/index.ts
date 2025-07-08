@@ -4,6 +4,7 @@ import { getCustomers, createCustomer, getCustomerById } from './supabaseAPI.js'
 import { getProducts, getProductById, createProduct } from './supabaseAPI.js';
 import { getOrders, getOrderById, createOrder } from './supabaseAPI.js';
 
+
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -93,6 +94,15 @@ app.post('/orders', async (req, res) => {
 // --- Root ---
 app.get('/', (req, res) => {
   res.send('Welcome to the MCP Supabase API server!');
+});
+
+// MCP base endpoint handlers for GET and POST
+app.get('/mcp', (req, res) => {
+  res.send('MCP endpoint. Use /mcp/list-tools or /mcp/call-tool.');
+});
+
+app.post('/mcp', (req, res) => {
+  res.send('MCP endpoint. Use /mcp/list-tools or /mcp/call-tool.');
 });
 
 // List available tools
