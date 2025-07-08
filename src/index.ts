@@ -23,7 +23,6 @@ import {
   verifyDeliveryAddress,
   getOrderOutstandingAmount,
   getNextPaymentInfo,
-  skipNextPayment,
   getPaymentMethod
 } from './supabaseAPI.js';
 
@@ -250,17 +249,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['order_id']
         }
       },
-      {
-        name: 'skip_next_payment',
-        description: 'Skip the next payment and see the new payment schedule.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            order_id: { type: 'string' }
-          },
-          required: ['order_id']
-        }
-      },
+      // {
+      //   name: 'skip_next_payment',
+      //   description: 'Skip the next payment and see the new payment schedule.',
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       order_id: { type: 'string' }
+      //     },
+      //     required: ['order_id']
+      //   }
+      // },
       {
         name: 'get_payment_method',
         description: 'Check how an order is being paid and get account details.',
@@ -314,8 +313,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text', text: JSON.stringify(await getOrderOutstandingAmount(args.order_id), null, 2) }] };
         case 'get_next_payment_info':
           return { content: [{ type: 'text', text: JSON.stringify(await getNextPaymentInfo(args.order_id), null, 2) }] };
-        case 'skip_next_payment':
-          return { content: [{ type: 'text', text: JSON.stringify(await skipNextPayment(args.order_id), null, 2) }] };
         case 'get_payment_method':
           return { content: [{ type: 'text', text: JSON.stringify(await getPaymentMethod(args.order_id), null, 2) }] };
         default:
