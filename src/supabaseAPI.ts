@@ -107,10 +107,6 @@ export async function getNextPaymentInfo(order_id) {
   return fetchFromSupabase(`/payment-schedules?order_id=${order_id}`);
 }
 
-export async function getHeadStartPlanStatus(customer_id) {
-  // Assumes GET /customers/:id/headstart (custom endpoint)
-  return fetchFromSupabase(`/customers/${customer_id}/headstart`);
-}
 
 export async function skipNextPayment(order_id) {
   // Assumes PATCH /payment-schedules/:id/skip

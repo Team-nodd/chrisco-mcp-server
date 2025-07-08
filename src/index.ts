@@ -23,7 +23,6 @@ import {
   verifyDeliveryAddress,
   getOrderOutstandingAmount,
   getNextPaymentInfo,
-  getHeadStartPlanStatus,
   skipNextPayment,
   getPaymentMethod
 } from './supabaseAPI.js';
@@ -252,17 +251,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         }
       },
       {
-        name: 'get_headstart_plan_status',
-        description: 'Get the paid amount and projected value of the HeadStart plan.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            customer_id: { type: 'string' }
-          },
-          required: ['customer_id']
-        }
-      },
-      {
         name: 'skip_next_payment',
         description: 'Skip the next payment and see the new payment schedule.',
         inputSchema: {
@@ -326,8 +314,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text', text: JSON.stringify(await getOrderOutstandingAmount(args.order_id), null, 2) }] };
         case 'get_next_payment_info':
           return { content: [{ type: 'text', text: JSON.stringify(await getNextPaymentInfo(args.order_id), null, 2) }] };
-        case 'get_headstart_plan_status':
-          return { content: [{ type: 'text', text: JSON.stringify(await getHeadStartPlanStatus(args.customer_id), null, 2) }] };
         case 'skip_next_payment':
           return { content: [{ type: 'text', text: JSON.stringify(await skipNextPayment(args.order_id), null, 2) }] };
         case 'get_payment_method':
