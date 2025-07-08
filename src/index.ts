@@ -85,8 +85,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_customers',
-        description: 'Retrieve all customers.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
+        description: 'Retrieve customers with optional filtering (first_name, last_name, email, phone) and pagination (limit, offset).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            first_name: { type: 'string' },
+            last_name: { type: 'string' },
+            email: { type: 'string' },
+            phone: { type: 'string' },
+            limit: { type: 'number' },
+            offset: { type: 'number' }
+          },
+          required: []
+        }
       },
       {
         name: 'create_customer',
@@ -102,8 +113,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_products',
-        description: 'Retrieve all products.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
+        description: 'Retrieve products with advanced filtering (name, description, stock_quantity_less, stock_quantity_greater) and pagination (limit, offset).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+            stock_quantity_less: { type: 'number' },
+            stock_quantity_greater: { type: 'number' },
+            limit: { type: 'number' },
+            offset: { type: 'number' }
+          },
+          required: []
+        }
       },
       {
         name: 'create_product',
@@ -119,8 +141,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_orders',
-        description: 'Retrieve all orders.',
-        inputSchema: { type: 'object', properties: {}, required: [] }
+        description: 'Retrieve orders with filtering (customer_id, product_id, item_description, status, delivery_address) and pagination (limit, offset).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            customer_id: { type: 'string' },
+            product_id: { type: 'string' },
+            item_description: { type: 'string' },
+            status: { type: 'string' },
+            delivery_address: { type: 'string' },
+            limit: { type: 'number' },
+            offset: { type: 'number' }
+          },
+          required: []
+        }
       },
       {
         name: 'create_order',
@@ -233,16 +267,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await executeWithTimeout(async () => {
       switch (name) {
         case 'get_customers':
-          return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(), null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(args), null, 2) }] };
         
         case 'create_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await createCustomer(args), null, 2) }] };
         case 'get_products':
-          return { content: [{ type: 'text', text: JSON.stringify(await getProducts(), null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await getProducts(args), null, 2) }] };
         case 'create_product':
           return { content: [{ type: 'text', text: JSON.stringify(await createProduct(args), null, 2) }] };
         case 'get_orders':
-          return { content: [{ type: 'text', text: JSON.stringify(await getOrders(), null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await getOrders(args), null, 2) }] };
         case 'create_order':
           return { content: [{ type: 'text', text: JSON.stringify(await createOrder(args), null, 2) }] };
         case 'change_delivery_address':

@@ -8,10 +8,20 @@ async function fetchFromSupabase(path, options = {}) {
   return res.json();
 }
 
-export async function getCustomers() {
-  const res = await fetch(`${BASE_URL}/customers`);
-  if (!res.ok) throw new Error('Failed to fetch customers');
-  return res.json();
+function buildQuery(params) {
+  if (!params) return '';
+  const esc = encodeURIComponent;
+  return (
+    '?' +
+    Object.entries(params)
+      .filter(([_, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => `${esc(k)}=${esc(String(v))}`)
+      .join('&')
+  );
+}
+
+export async function getCustomers(params) {
+  return fetchFromSupabase(`/customers${buildQuery(params)}`);
 }
 
 export async function getCustomerById(id) {
@@ -32,10 +42,8 @@ export async function createCustomer(data) {
 
 
 
-export async function getProducts() {
-  const res = await fetch(`${BASE_URL}/products`);
-  if (!res.ok) throw new Error('Failed to fetch products');
-  return res.json();
+export async function getProducts(params) {
+  return fetchFromSupabase(`/products${buildQuery(params)}`);
 }
 
 export async function getProductById(id) {
@@ -55,10 +63,8 @@ export async function createProduct(data) {
   return res.json();
 }
 
-export async function getOrders() {
-  const res = await fetch(`${BASE_URL}/orders`);
-  if (!res.ok) throw new Error('Failed to fetch orders');
-  return res.json();
+export async function getOrders(params) {
+  return fetchFromSupabase(`/orders${buildQuery(params)}`);
 }
 
 export async function getOrderById(id) {
