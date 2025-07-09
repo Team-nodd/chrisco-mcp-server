@@ -396,6 +396,13 @@ app.post('/mcp', async (req, res) => {
   console.log(`=== [${new Date().toISOString()}] MCP REQUEST END [${requestId}] ===\n`);
 });
 
+// Add a GET handler for /mcp to avoid 404s on GET requests
+app.get('/mcp', (req, res) => {
+  res.status(200).json({
+    message: 'MCP endpoint is alive. Please use POST requests to interact with this endpoint.'
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
