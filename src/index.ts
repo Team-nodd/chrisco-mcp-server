@@ -14,10 +14,8 @@ import {
   createCustomer,
   getCustomerById,
   getProducts,
-  getProductById,
   createProduct,
   getOrders,
-  getOrderById,
   createOrder,
   changeDeliveryAddress,
   verifyDeliveryAddress,
@@ -82,8 +80,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: 'get_customers',
-        description: 'Retrieve customers with optional filtering (first_name, last_name, email, phone) and pagination (limit, offset).',
+        name: 'get_customer',
+        description: 'Fetches up to 20 of the most recent orders associated with a customer, if available. This tool returns key order details including order ID, product list, outstanding amount, total paid so far, next payment date, payment frequency, payment method, and order status. It should be used in every conversation after verifying the customer’s identity to ensure you have full visibility into their order and payment history.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -91,119 +89,104 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             last_name: { type: 'string' },
             email: { type: 'string' },
             phone: { type: 'string' },
-            limit: { type: 'number' },
-            offset: { type: 'number' }
           },
-          required: []
+          required: ['first_name', 'last_name', 'email', 'phone']
         }
       },
       {
-        name: 'create_customer',
-        description: 'Create a new customer.',
+        name: 'update_customer',
+        description: 'Update specific details of an existing customer. This tool should only be used after identity verification, and only for fields that the customer has explicitly asked to change (e.g. contact details, address, or preferences).',
         inputSchema: {
           type: 'object',
           properties: {
-            first_name: { type: 'string' },
-            last_name: { type: 'string' },
-            date_of_birth: { type: 'string' },
+            customer_id: { type: 'string', description: 'Unique ID of the customer to update' },
             street_address: { type: 'string' },
             suburb: { type: 'string' },
             state: { type: 'string' },
             postcode: { type: 'string' },
-            day_phone: { type: 'string' },
-            evening_phone: { type: 'string' },
-            mobile_phone: { type: 'string' },
-            member_name: { type: 'string' },
-            member_number: { type: 'string' },
-            join_date: { type: 'string' },
-            correspondence_preference: { type: 'string' }, 
-            email: { type: 'string' },
-            postal_address: { type: 'string' },
-            title: { type: 'string' },
-            full_name: { type: 'string' },
             phone: { type: 'string' },
+            email: { type: 'string' },
+            correspondence_preference: { type: 'string' },
+            postal_address: { type: 'string' }
           },
-          required: ['first_name', 'last_name', 'date_of_birth', 'street_address', 'suburb', 'postcode', 'phone', 'phone', 'mobile_phone', 'member_number', 'join_date', 'email', 'postal_address', 'title', ]
+          required: ['customer_id']
         }
       },
+      
+      // {
+      //   name: 'get_products',
+      //   description: 'Retrieve products with advanced filtering (name, description, stock_quantity_less, stock_quantity_greater) and pagination (limit, offset).',
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       name: { type: 'string' },
+      //       description: { type: 'string' },
+      //       stock_quantity_less: { type: 'number' },
+      //       stock_quantity_greater: { type: 'number' },
+      //       limit: { type: 'number' },
+      //       offset: { type: 'number' }
+      //     },
+      //     required: []
+      //   }
+      // },
+      // {
+      //   name: 'create_product',
+      //   description: 'Create a new product.',
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       name: { type: 'string' },
+      //       description: { type: 'string' },
+      //       price: { type: 'number' }, 
+      //       sku: { type: 'string' },
+      //       stock_quantity: { type: 'number' },
+      //       is_active: { type: 'boolean' }, 
+      //     },
+      //     required: ['name', 'description', 'price', 'sku', 'stock_quantity']
+      //   }
+      // },
       {
-        name: 'get_products',
-        description: 'Retrieve products with advanced filtering (name, description, stock_quantity_less, stock_quantity_greater) and pagination (limit, offset).',
+        name: 'get_orders_for_a_customer',
+        description: 'Fetches up to 20 of the most recent orders associated with a customer, if available. This tool returns key order details including order ID, product list, outstanding amount, next payment info, payment method, and status. It should be used in every conversation after verifying the customer’s identity to ensure you have full context when assisting.',
         inputSchema: {
           type: 'object',
           properties: {
-            name: { type: 'string' },
-            description: { type: 'string' },
-            stock_quantity_less: { type: 'number' },
-            stock_quantity_greater: { type: 'number' },
-            limit: { type: 'number' },
-            offset: { type: 'number' }
+            customer_id: { type: 'string', description: 'Unique identifier for the customer' },
+            status: { type: 'string', description: 'Filter by order status (e.g., active, cancelled, completed)' },
+            limit: { type: 'number', description: 'Maximum number of orders to return (default: 20)' }
           },
-          required: []
+          required: ['customer_id']
         }
       },
-      {
-        name: 'create_product',
-        description: 'Create a new product.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            name: { type: 'string' },
-            description: { type: 'string' },
-            price: { type: 'number' }, 
-            sku: { type: 'string' },
-            stock_quantity: { type: 'number' },
-            is_active: { type: 'boolean' }, 
-          },
-          required: ['name', 'description', 'price', 'sku', 'stock_quantity']
-        }
-      },
-      {
-        name: 'get_orders',
-        description: 'Retrieve orders with filtering (customer_id, product_id, item_description, status, delivery_address) and pagination (limit, offset).',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            customer_id: { type: 'string' },
-            product_id: { type: 'string' },
-            item_description: { type: 'string' },
-            status: { type: 'string' },
-            delivery_address: { type: 'string' },
-            limit: { type: 'number' },
-            offset: { type: 'number' }
-          },
-          required: []
-        }
-      },
-      {
-        name: 'create_order',
-        description: `Create a new order. Required fields: customer_id (existing customer), product_id (selected product), item_description, quantity, total_amount, amount_paid, payment_method_id (selected payment method).\n\nAuto-generated: payment_id is created automatically.\n\nThe delivery_address is constructed from the customer's address details (street, suburb, state, postcode).`,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            customer_id: { type: 'string', description: 'Reference to an existing customer' },
-            product_id: { type: 'string', description: 'Reference to the selected product' },
-            item_description: { type: 'string' },
-            quantity: { type: 'number' },
-            total_amount: { type: 'number' },
-            amount_paid: { type: 'number' },
-            payment_method_id: { type: 'string', description: 'Reference to the selected payment method' }
-          },
-          required: ['customer_id', 'product_id', 'item_description', 'quantity', 'total_amount', 'amount_paid', 'payment_method_id']
-        }
-      },
-      {
-        name: 'create_payment_method',
-        description: 'Create a new payment method. Required fields: method_type (e.g., Credit Card, Debit Card, etc.), masked_card_number (last four digits only, e.g., "**** **** **** 1234").',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            method_type: { type: 'string', description: 'e.g., Credit Card, Debit Card, etc.' },
-            masked_card_number: { type: 'string', description: 'Last four digits only, e.g., "**** **** **** 1234"' }
-          },
-          required: ['method_type', 'masked_card_number']
-        }
-      },
+      // {
+      //   name: 'create_order',
+      //   description: `Create a new order. Required fields: customer_id (existing customer), product_id (selected product), item_description, quantity, total_amount, amount_paid, payment_method_id (selected payment method).\n\nAuto-generated: payment_id is created automatically.\n\nThe delivery_address is constructed from the customer's address details (street, suburb, state, postcode).`,
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       customer_id: { type: 'string', description: 'Reference to an existing customer' },
+      //       product_id: { type: 'string', description: 'Reference to the selected product' },
+      //       item_description: { type: 'string' },
+      //       quantity: { type: 'number' },
+      //       total_amount: { type: 'number' },
+      //       amount_paid: { type: 'number' },
+      //       payment_method_id: { type: 'string', description: 'Reference to the selected payment method' }
+      //     },
+      //     required: ['customer_id', 'product_id', 'item_description', 'quantity', 'total_amount', 'amount_paid', 'payment_method_id']
+      //   }
+      // },
+      // {
+      //   name: 'create_payment_method',
+      //   description: 'Create a new payment method. Required fields: method_type (e.g., Credit Card, Debit Card, etc.), masked_card_number (last four digits only, e.g., "**** **** **** 1234").',
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       method_type: { type: 'string', description: 'e.g., Credit Card, Debit Card, etc.' },
+      //       masked_card_number: { type: 'string', description: 'Last four digits only, e.g., "**** **** **** 1234"' }
+      //     },
+      //     required: ['method_type', 'masked_card_number']
+      //   }
+      // },
       {
         name: 'change_delivery_address',
         description: 'Change the delivery address for an order.',
@@ -227,28 +210,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['order_id']
         }
       },
-      {
-        name: 'get_order_outstanding_amount',
-        description: 'Get the outstanding amount or amount paid for an order.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            order_id: { type: 'string' }
-          },
-          required: ['order_id']
-        }
-      },
-      {
-        name: 'get_next_payment_info',
-        description: 'Get the next payment date and payment frequency for an order.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            order_id: { type: 'string' }
-          },
-          required: ['order_id']
-        }
-      },
+      // {
+      //   name: 'get_order_outstanding_amount',
+      //   description: 'Get the outstanding amount or amount paid for an order.',
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       order_id: { type: 'string' }
+      //     },
+      //     required: ['order_id']
+      //   }
+      // },
+      // {
+      //   name: 'get_next_payment_info',
+      //   description: 'Get the next payment date and payment frequency for an order.',
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       order_id: { type: 'string' }
+      //     },
+      //     required: ['order_id']
+      //   }
+      // },
       // {
       //   name: 'skip_next_payment',
       //   description: 'Skip the next payment and see the new payment schedule.',
@@ -260,17 +243,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       //     required: ['order_id']
       //   }
       // },
-      {
-        name: 'get_payment_method',
-        description: 'Check how an order is being paid and get account details.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            order_id: { type: 'string' }
-          },
-          required: ['order_id']
-        }
-      },
+      // {
+      //   name: 'get_payment_method',
+      //   description: 'Check how an order is being paid and get account details.',
+      //   inputSchema: {
+      //     type: 'object',
+      //     properties: {
+      //       order_id: { type: 'string' }
+      //     },
+      //     required: ['order_id']
+      //   }
+      // },
       // ...add more tools for your API as needed
     ]
   };
@@ -294,17 +277,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       switch (name) {
         case 'get_customers':
           return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(args), null, 2) }] };
-        
-        case 'create_customer':
-          return { content: [{ type: 'text', text: JSON.stringify(await createCustomer(args), null, 2) }] };
-        case 'get_products':
-          return { content: [{ type: 'text', text: JSON.stringify(await getProducts(args), null, 2) }] };
-        case 'create_product':
-          return { content: [{ type: 'text', text: JSON.stringify(await createProduct(args), null, 2) }] };
-        case 'get_orders':
+        case 'update_customer':
+          return { content: [{ type: 'text', text: JSON.stringify(await getCustomerById(args), null, 2) }] };
+        // case 'get_products':
+        //   return { content: [{ type: 'text', text: JSON.stringify(await getProducts(args), null, 2) }] };
+        // case 'create_product':
+        //   return { content: [{ type: 'text', text: JSON.stringify(await createProduct(args), null, 2) }] };
+        case 'get_orders_for_a_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await getOrders(args), null, 2) }] };
         case 'create_order':
-          return { content: [{ type: 'text', text: JSON.stringify(await createOrder(args), null, 2) }] };
+          // return { content: [{ type: 'text', text: JSON.stringify(await createOrder(args), null, 2) }] };
         case 'change_delivery_address':
           return { content: [{ type: 'text', text: JSON.stringify(await changeDeliveryAddress(args.order_id, args.new_address), null, 2) }] };
         case 'verify_delivery_address':
