@@ -88,7 +88,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'update_customer',
-        description: 'Update specific details of an existing customer. This tool should only be used after identity verification, and only for fields that the customer has explicitly asked to change (e.g. contact details, address, or preferences).',
+        description: 'Update specific details of an existing customer. This tool should only be used after the customer’s identity has been verified, and only for fields they’ve explicitly asked to change—such as contact details, address, or preferences. If the customer requests a name change, both first_name and last_name must be provided accurately.',
         inputSchema: {
           type: 'object',
           properties: {
