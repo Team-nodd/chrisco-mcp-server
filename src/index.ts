@@ -335,18 +335,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// MCP endpoint with stateless transport (no session management)
+// MCP endpoint with stateless transport
 app.post('/mcp', async (req, res) => {
-  const timestamp = new Date().toISOString();
   const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  console.log(`\n=== [${timestamp}] MCP REQUEST START [${requestId}] ===`);
-  console.log(`Method: ${req.method}`);
-  console.log(`URL: ${req.url}`);
-  console.log(`Headers:`, JSON.stringify(req.headers, null, 2));
-  console.log(`Body:`, JSON.stringify(req.body, null, 2));
-  req.setTimeout(25000);
-  res.setTimeout(25000);
-  console.log(`🚀 [${requestId}] Handling stateless MCP request`);
+  console.log(`🚀 [${requestId}] Handling MCP request`);
+  
   try {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     await server.connect(transport);
@@ -362,38 +355,6 @@ app.post('/mcp', async (req, res) => {
       });
     }
   }
-  console.log(`=== [${new Date().toISOString()}] MCP REQUEST END [${requestId}] ===\n`);
-});
-   
-
-// MCP endpoint with stateless transport (no session management)
-app.post('/mcp', async (req, res) => {
-  const timestamp = new Date().toISOString();
-  const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  console.log(`\n=== [${timestamp}] MCP REQUEST START [${requestId}] ===`);
-  console.log(`Method: ${req.method}`);
-  console.log(`URL: ${req.url}`);
-  console.log(`Headers:`, JSON.stringify(req.headers, null, 2));
-  console.log(`Body:`, JSON.stringify(req.body, null, 2));
-  req.setTimeout(25000);
-  res.setTimeout(25000);
-  console.log(`🚀 [${requestId}] Handling stateless MCP request`);
-  try {
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-    console.log(`✨ [${requestId}] Request completed successfully`);
-  } catch (error) {
-    console.error(`❌ [${requestId}] Error handling request:`, error);
-    if (!res.headersSent) {
-      res.status(500).json({
-        jsonrpc: '2.0',
-        error: { code: -32603, message: 'Request handling failed', data: error.message },
-        id: null
-      });
-    }
-  }
-  console.log(`=== [${new Date().toISOString()}] MCP REQUEST END [${requestId}] ===\n`);
 });
 
 // Add a GET handler for /mcp to avoid 404s on GET requests
