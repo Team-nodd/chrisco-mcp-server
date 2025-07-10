@@ -12,7 +12,6 @@ import cors from 'cors';
 import {
   getCustomers,
   createCustomer,
-  getCustomerById,
   getProducts,
   createProduct,
   getOrders,
@@ -21,7 +20,8 @@ import {
   verifyDeliveryAddress,
   getOrderOutstandingAmount,
   getNextPaymentInfo,
-  getPaymentMethod
+  getPaymentMethod,
+  updateCustomerByID
 } from './supabaseAPI.js';
 
 const app = express();
@@ -278,7 +278,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         case 'get_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(args), null, 2) }] };
         case 'update_customer':
-          return { content: [{ type: 'text', text: JSON.stringify(await getCustomerById(args), null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await updateCustomerByID(args as { customer_id: string; [key: string]: any }), null, 2) }] };
         // case 'get_products':
         //   return { content: [{ type: 'text', text: JSON.stringify(await getProducts(args), null, 2) }] };
         // case 'create_product':

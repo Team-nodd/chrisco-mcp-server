@@ -24,9 +24,13 @@ export async function getCustomers(params) {
   return fetchFromSupabase(`/customers${buildQuery(params)}`);
 }
 
-export async function getCustomerById(id) {
-  const res = await fetch(`${BASE_URL}/customers/${id}`);
-  if (!res.ok) throw new Error('Failed to fetch customer');
+export async function updateCustomerByID({ customer_id, ...fields }) {
+  const res = await fetch(`${BASE_URL}/customers/${customer_id}`, {
+    method: 'PATCH', // or 'PUT' if your API expects that
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields)
+  });
+  if (!res.ok) throw new Error('Failed to update customer');
   return res.json();
 }
 
