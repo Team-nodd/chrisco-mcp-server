@@ -275,7 +275,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     console.log(`MCP Tool called: ${name}`, JSON.stringify(args));
     const result = await executeWithTimeout(async () => {
       switch (name) {
-        case 'get_customers':
+        case 'get_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(args), null, 2) }] };
         case 'update_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await getCustomerById(args), null, 2) }] };
