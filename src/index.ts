@@ -74,14 +74,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_customer',
-        description: 'Retrieves a specific customer’s information using an exact match of first name, last name, email, and phone number. Once a customer is successfully identified, immediately fetch their associated orders using the "get_orders_for_a_customer" tool. This step is mandatory and ensures Jesse always has full order context when assisting the user.',
+        description: 'Use this tool to identify a customer by matching their first name, last name, email, and phone number. Once the customer is found, their key details will be returned — including their contact info, address, member number, and total outstanding balance across all orders. After successfully identifying the customer, immediately follow up by calling the "get_orders_for_a_customer" tool to get full order context. This step ensures you can answer any account or payment-related questions with accuracy and clarity.',
         inputSchema: {
           type: 'object',
           properties: {
             first_name: { type: 'string' },
             last_name: { type: 'string' },
             email: { type: 'string' },
-            phone: { type: 'string' },
+            phone: { type: 'string' }
           },
           required: ['first_name', 'last_name', 'email', 'phone']
         }
