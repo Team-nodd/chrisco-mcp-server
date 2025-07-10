@@ -153,7 +153,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'update_order',
-        description: 'Use this tool to update the delivery address for an existing order after the customer asks to change where their order should be sent. This only updates the delivery address — no other parts of the order will be changed. Make sure the order ID is correct and the new address is complete before proceeding.',
+        description: 'Use this tool to update the delivery address for an existing order after the customer asks to change where their order should be sent. This only updates the delivery address — no other parts of the order will be changed. Make sure the order ID is correct and the new address is complete before proceeding. you should not ask the order ID directly from the customer instead pass it from the data you got before',
         inputSchema: {
           type: 'object',
           properties: {
