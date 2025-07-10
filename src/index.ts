@@ -203,7 +203,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         case 'get_orders_for_a_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await getOrders(args), null, 2) }] };
         case 'update_order':
-          return { content: [{ type: 'text', text: JSON.stringify(await changeDeliveryAddress(args.order_id, args.new_address), null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(await changeDeliveryAddress(args.order_id, args.delivery_address), null, 2) }] };
         case 'skip_next_payment':
           return { content: [{ type: 'text', text: JSON.stringify(await skipNextPayment(args.order_id), null, 2) }] };
         default:

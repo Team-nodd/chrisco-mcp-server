@@ -87,24 +87,15 @@ export async function createOrder(data) {
   return res.json();
 }
 
-export async function changeDeliveryAddress(order_id, new_address) {
+export async function changeDeliveryAddress(order_id, delivery_address) {
   // Assumes PUT /orders/:id with { delivery_address }
   return fetchFromSupabase(`/orders/${order_id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ delivery_address: new_address })
+    body: JSON.stringify({ delivery_address: delivery_address })
   });
 }
 
-export async function verifyDeliveryAddress(order_id) {
-  // Assumes GET /orders/:id returns address info
-  return fetchFromSupabase(`/orders/${order_id}`);
-}
-
-export async function getOrderOutstandingAmount(order_id) {
-  // Assumes GET /orders/:id returns outstanding info
-  return fetchFromSupabase(`/orders/${order_id}`);
-}
 
 export async function getNextPaymentInfo(order_id) {
   // Assumes GET /payment-schedules?order_id=...
@@ -119,9 +110,6 @@ export async function skipNextPayment(order_id) {
   });
 }
 
-export async function getPaymentMethod(order_id) {
-  // Assumes GET /orders/:id/payments
-  return fetchFromSupabase(`/orders/${order_id}/payments`);
-}
+
 
 
