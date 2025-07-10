@@ -112,12 +112,12 @@ export async function getNextPaymentInfo(order_id) {
 }
 
 
-// export async function skipNextPayment(order_id) {
-//   // Assumes PATCH /payment-schedules/:id/skip
-//   return fetchFromSupabase(`/payment-schedules/${order_id}/skip`, {
-//     method: 'PATCH'
-//   });
-// }
+export async function skipNextPayment(order_id) {
+  // Assumes PATCH /payment-schedules/:id/skip
+  return fetchFromSupabase(`/payment-schedules/${order_id}/skip`, {
+    method: 'PATCH'
+  });
+}
 
 export async function getPaymentMethod(order_id) {
   // Assumes GET /orders/:id/payments

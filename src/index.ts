@@ -11,17 +11,10 @@ import express from 'express';
 import cors from 'cors';
 import {
   getCustomers,
-  createCustomer,
-  getProducts,
-  createProduct,
   getOrders,
-  createOrder,
   changeDeliveryAddress,
-  verifyDeliveryAddress,
-  getOrderOutstandingAmount,
-  getNextPaymentInfo,
-  getPaymentMethod,
-  updateCustomerByID
+  updateCustomerByID,
+  skipNextPayment
 } from './supabaseAPI.js';
 
 const app = express();
@@ -147,7 +140,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       // },
       {
         name: 'get_orders_for_a_customer',
-        description: 'Fetches up to 20 of the most recent orders associated with a customer, if available. This tool returns key order details including order ID, product list, outstanding amount, next payment info, payment method, and status. It should be used in every conversation after verifying the customer’s identity to ensure you have full context when assisting.',
+        description: 'Use this tool to look up a customer’s recent orders — up to 20 if available. It helps you understand what they’ve ordered, how much is still outstanding, what’s been paid, the next payment date, how they’re paying, and the current status of each order. This should be used once you’ve confirmed who you’re speaking with, so you can support them with full confidence and context. If the customer asks what happens when a payment is skipped, let them know the schedule will simply extend by the length of their payment frequency (e.g., one week for weekly payments). If they ask to skip their next payment, use the "skip_next_payment" tool to process that change.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -158,50 +151,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['customer_id']
         }
       },
-      // {
-      //   name: 'create_order',
-      //   description: `Create a new order. Required fields: customer_id (existing customer), product_id (selected product), item_description, quantity, total_amount, amount_paid, payment_method_id (selected payment method).\n\nAuto-generated: payment_id is created automatically.\n\nThe delivery_address is constructed from the customer's address details (street, suburb, state, postcode).`,
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       customer_id: { type: 'string', description: 'Reference to an existing customer' },
-      //       product_id: { type: 'string', description: 'Reference to the selected product' },
-      //       item_description: { type: 'string' },
-      //       quantity: { type: 'number' },
-      //       total_amount: { type: 'number' },
-      //       amount_paid: { type: 'number' },
-      //       payment_method_id: { type: 'string', description: 'Reference to the selected payment method' }
-      //     },
-      //     required: ['customer_id', 'product_id', 'item_description', 'quantity', 'total_amount', 'amount_paid', 'payment_method_id']
-      //   }
-      // },
-      // {
-      //   name: 'create_payment_method',
-      //   description: 'Create a new payment method. Required fields: method_type (e.g., Credit Card, Debit Card, etc.), masked_card_number (last four digits only, e.g., "**** **** **** 1234").',
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       method_type: { type: 'string', description: 'e.g., Credit Card, Debit Card, etc.' },
-      //       masked_card_number: { type: 'string', description: 'Last four digits only, e.g., "**** **** **** 1234"' }
-      //     },
-      //     required: ['method_type', 'masked_card_number']
-      //   }
-      // },
       {
-        name: 'change_delivery_address',
-        description: 'Change the delivery address for an order.',
+        name: 'update_order',
+        description: 'Use this tool to update the delivery address for an existing order after the customer asks to change where their order should be sent. This only updates the delivery address — no other parts of the order will be changed. Make sure the order ID is correct and the new address is complete before proceeding.',
         inputSchema: {
           type: 'object',
           properties: {
             order_id: { type: 'string' },
-            new_address: { type: 'string' }
+            delivery_address: { type: 'string' }
           },
-          required: ['order_id', 'new_address']
+          required: ['order_id', 'delivery_address']
         }
       },
       {
-        name: 'verify_delivery_address',
-        description: 'Verify the postal or delivery address for an order.',
+        name: 'skip_next_payment',
+        description: 'Use this tool to skip the upcoming payment for an order. It automatically adjusts the schedule by shifting the next payment date forward based on the payment frequency (e.g., by one week for weekly plans). This is helpful when a customer requests to pause their payment without cancelling their order.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -209,51 +173,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['order_id']
         }
-      },
-      // {
-      //   name: 'get_order_outstanding_amount',
-      //   description: 'Get the outstanding amount or amount paid for an order.',
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       order_id: { type: 'string' }
-      //     },
-      //     required: ['order_id']
-      //   }
-      // },
-      // {
-      //   name: 'get_next_payment_info',
-      //   description: 'Get the next payment date and payment frequency for an order.',
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       order_id: { type: 'string' }
-      //     },
-      //     required: ['order_id']
-      //   }
-      // },
-      // {
-      //   name: 'skip_next_payment',
-      //   description: 'Skip the next payment and see the new payment schedule.',
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       order_id: { type: 'string' }
-      //     },
-      //     required: ['order_id']
-      //   }
-      // },
-      // {
-      //   name: 'get_payment_method',
-      //   description: 'Check how an order is being paid and get account details.',
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       order_id: { type: 'string' }
-      //     },
-      //     required: ['order_id']
-      //   }
-      // },
+      }
+      
       // ...add more tools for your API as needed
     ]
   };
@@ -279,24 +200,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text', text: JSON.stringify(await getCustomers(args), null, 2) }] };
         case 'update_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await updateCustomerByID(args as { customer_id: string; [key: string]: any }), null, 2) }] };
-        // case 'get_products':
-        //   return { content: [{ type: 'text', text: JSON.stringify(await getProducts(args), null, 2) }] };
-        // case 'create_product':
-        //   return { content: [{ type: 'text', text: JSON.stringify(await createProduct(args), null, 2) }] };
         case 'get_orders_for_a_customer':
           return { content: [{ type: 'text', text: JSON.stringify(await getOrders(args), null, 2) }] };
-        case 'create_order':
-          // return { content: [{ type: 'text', text: JSON.stringify(await createOrder(args), null, 2) }] };
-        case 'change_delivery_address':
+        case 'update_order':
           return { content: [{ type: 'text', text: JSON.stringify(await changeDeliveryAddress(args.order_id, args.new_address), null, 2) }] };
-        case 'verify_delivery_address':
-          return { content: [{ type: 'text', text: JSON.stringify(await verifyDeliveryAddress(args.order_id), null, 2) }] };
-        case 'get_order_outstanding_amount':
-          return { content: [{ type: 'text', text: JSON.stringify(await getOrderOutstandingAmount(args.order_id), null, 2) }] };
-        case 'get_next_payment_info':
-          return { content: [{ type: 'text', text: JSON.stringify(await getNextPaymentInfo(args.order_id), null, 2) }] };
-        case 'get_payment_method':
-          return { content: [{ type: 'text', text: JSON.stringify(await getPaymentMethod(args.order_id), null, 2) }] };
+        case 'skip_next_payment':
+          return { content: [{ type: 'text', text: JSON.stringify(await skipNextPayment(args.order_id), null, 2) }] };
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
