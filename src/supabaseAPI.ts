@@ -26,7 +26,7 @@ export async function getCustomers(params) {
 
 export async function updateCustomerByID({ customer_id, ...fields }) {
   const res = await fetch(`${BASE_URL}/customers/${customer_id}`, {
-    method: 'PATCH', // or 'PUT' if your API expects that
+    method: 'PUT', // or 'PUT' if your API expects that
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(fields)
   });
