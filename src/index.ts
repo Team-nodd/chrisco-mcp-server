@@ -81,7 +81,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_customer',
-        description: 'Fetches up to 20 of the most recent orders associated with a customer, if available. This tool returns key order details including order ID, product list, outstanding amount, total paid so far, next payment date, payment frequency, payment method, and order status. It should be used in every conversation after verifying the customer’s identity to ensure you have full visibility into their order and payment history.',
+        description: 'Retrieves a specific customer’s information using an exact match of first name, last name, email, and phone number. Once a customer is successfully identified, immediately fetch their associated orders using the "get_orders_for_a_customer" tool. This step is mandatory and ensures Jesse always has full order context when assisting the user.',
         inputSchema: {
           type: 'object',
           properties: {
