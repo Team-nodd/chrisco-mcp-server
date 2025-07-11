@@ -110,6 +110,16 @@ export async function skipNextPayment(order_id) {
   });
 }
 
+export async function InfoSkippingNextPayment(data) {
+  const res = await fetch(`${BASE_URL}/payment-redistribution`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error('Failed to get next payment info');
+  return res.json();
+}
+
 
 
 

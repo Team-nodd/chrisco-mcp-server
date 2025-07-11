@@ -14,7 +14,8 @@ import {
   getOrders,
   changeDeliveryAddress,
   updateCustomerByID,
-  skipNextPayment
+  skipNextPayment,
+  InfoSkippingNextPayment
 } from './supabaseAPI.js';
 
 const app = express();
@@ -172,7 +173,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['order_id']
         }
-      }
+      },
+      {
+        name: 'get_info_for_skipping_next_payment',
+        description: 'This tool provides two options for customers who wish to skip an upcoming payment. It is triggered only when a customer requests information about skipping a payment. Once the order is identified, the tool uses the associated payment schedule ID to retrieve the payment data. The user will be asked how many payments they want to skip (within the limits of the schedule’s end date and frequency). Based on this, the tool will return two options: (1) redistribute the skipped amount across the remaining payments, or (2) add the skipped amount to the next scheduled payment.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            payment_schedule_id: { type: 'number' },
+            paymentsToSkip: { type: 'number' },
+            totalOwed: { type: 'number' }
+          },
+          required: ['payment_schedule_id', 'paymentsToSkip', 'totalOwed']
+        }
+      }      
       
       // ...add more tools for your API as needed
     ]
@@ -205,6 +219,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text', text: JSON.stringify(await changeDeliveryAddress(args.order_id, args.delivery_address), null, 2) }] };
         case 'skip_next_payment':
           return { content: [{ type: 'text', text: JSON.stringify(await skipNextPayment(args.order_id), null, 2) }] };
+        case 'get_info_for_skipping_next_payment':
+          return { content: [{ type: 'text', text: JSON.stringify(await InfoSkippingNextPayment(args), null, 2) }] };
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
