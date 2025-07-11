@@ -80,9 +80,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             first_name: { type: 'string' },
             last_name: { type: 'string' },
-            email: { type: 'string' },
+            phone: { type: 'string' },
           },
-          required: ['first_name', 'last_name', 'email']
+          required: ['first_name', 'last_name', 'phone']
         }
       },
       {
