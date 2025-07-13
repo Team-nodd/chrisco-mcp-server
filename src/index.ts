@@ -140,7 +140,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       // },
       {
         name: 'get_orders_for_a_customer',
-        description: 'Use this tool to look up a customer’s recent orders — up to 20 if available. It helps you understand what they’ve ordered, how much is still outstanding, what’s been paid, the next payment date, how they’re paying, and the current status of each order. This should be used once you’ve confirmed who you’re speaking with, so you can support them with full confidence and context. If the customer asks what happens when a payment is skipped, let them know the schedule will simply extend by the length of their payment frequency (e.g., one week for weekly payments). If they ask to skip their next payment, use the "skip_next_payment" tool to process that change.',
+        description: 'Use this tool to look up a customer’s recent orders — up to 20 if available. It helps you understand what they’ve ordered, how much is still outstanding, what’s been paid, the next payment date, how they’re paying, and the current status of each order. This should be used once you’ve confirmed who you’re speaking with, so you can support them with full confidence and context.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -158,7 +158,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             order_id: { type: 'string' },
-            delivery_address: { type: 'string' }
+            delivery_address: { type: 'string' },
+            status: {type: 'string'}
           },
           required: ['order_id', 'delivery_address']
         }
