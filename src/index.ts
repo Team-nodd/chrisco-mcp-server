@@ -75,14 +75,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_customer',
-        description: 'Use this tool to identify a customer by matching their first name, last name, member number and date of birth. Once the customer is found, their key details will be returned — including their contact info, address, member number, and total outstanding balance across all orders. After successfully identifying the customer, immediately follow up by calling the "get_orders_for_a_customer" tool to get full order context. This step ensures you can answer any account or payment-related questions with accuracy and clarity.',
+        description: 'Use this tool to identify a customer by matching their first name, last name, member number, and date of birth. The date of birth must be in numeric YYYY-MM-DD format (for example, 2003-05-09). If the customer provides their date of birth in any other way—such as "5th of May 2003" or "May 5th, 2003"—you must convert it to numeric YYYY-MM-DD before calling this tool. Once the customer is found, their contact info, address, member number, and total outstanding balance across all orders will be returned. After successfully identifying the customer, immediately follow up by calling the "get_orders_for_a_customer" tool to retrieve the full order context. This ensures you can accurately answer any account or payment-related questions.',
         inputSchema: {
           type: 'object',
           properties: {
-            member_number: {type: 'string'},
+            member_number: { type: 'string' },
             first_name: { type: 'string' },
             last_name: { type: 'string' },
-            date_of_birth: { type: 'string'}
+            date_of_birth: { type: 'string' }
           },
           required: ['first_name', 'last_name', 'member_number', 'date_of_birth']
         }
