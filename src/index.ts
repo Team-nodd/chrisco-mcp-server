@@ -75,7 +75,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_customer',
-        description: 'Use this tool to identify a customer by matching their name, member number, and date of birth. The date of birth must be in numeric YYYY-MM-DD format (for example, 2003-05-09). If the customer provides their date of birth in any other way—such as "5th of May 2003" or "May 5th, 2003"—you must convert it to numeric YYYY-MM-DD before calling this tool. Once the customer is found, their contact info, address, member number, and total outstanding balance across all orders will be returned. After successfully identifying the customer, immediately follow up by calling the "get_orders_for_a_customer" tool to retrieve the full order context. This ensures you can accurately answer any account or payment-related questions.',
+        description: 'Find a customer using name, member number, and DOB (YYYY-MM-DD). Convert DOB if needed. Once matched, follow up with get_orders_for_a_customer.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -88,11 +88,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'update_customer',
-        description: 'Update specific details of an existing customer. This tool should only be used after the customer’s identity has been verified, and only for fields they’ve explicitly asked to change—such as contact details, address, or preferences. If the customer requests a name change, both first_name and last_name must be provided accurately.',
+        description: 'Update verified customer details (e.g. address, phone, email). Name changes require both first and last names.',
         inputSchema: {
           type: 'object',
           properties: {
-            customer_id: { type: 'string', description: 'Unique ID of the customer to update' },
+            customer_id: { type: 'string' },
             street_address: { type: 'string' },
             suburb: { type: 'string' },
             state: { type: 'string' },
@@ -105,68 +105,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['customer_id']
         }
       },
-      
-      // {
-      //   name: 'get_products',
-      //   description: 'Retrieve products with advanced filtering (name, description, stock_quantity_less, stock_quantity_greater) and pagination (limit, offset).',
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       name: { type: 'string' },
-      //       description: { type: 'string' },
-      //       stock_quantity_less: { type: 'number' },
-      //       stock_quantity_greater: { type: 'number' },
-      //       limit: { type: 'number' },
-      //       offset: { type: 'number' }
-      //     },
-      //     required: []
-      //   }
-      // },
-      // {
-      //   name: 'create_product',
-      //   description: 'Create a new product.',
-      //   inputSchema: {
-      //     type: 'object',
-      //     properties: {
-      //       name: { type: 'string' },
-      //       description: { type: 'string' },
-      //       price: { type: 'number' }, 
-      //       sku: { type: 'string' },
-      //       stock_quantity: { type: 'number' },
-      //       is_active: { type: 'boolean' }, 
-      //     },
-      //     required: ['name', 'description', 'price', 'sku', 'stock_quantity']
-      //   }
-      // },
       {
         name: 'get_orders_for_a_customer',
-        description: 'Use this tool to look up a customer’s recent orders — up to 20 if available. It helps you understand what they’ve ordered, how much is still outstanding, what’s been paid, the next payment date, how they’re paying, and the current status of each order. This should be used once you’ve confirmed who you’re speaking with, so you can support them with full confidence and context.',
+        description: 'Get up to 20 recent orders after verifying the customer. Includes status, payment info, and remaining balance.',
         inputSchema: {
           type: 'object',
           properties: {
-            customer_id: { type: 'string', description: 'Unique identifier for the customer' },
-            status: { type: 'string', description: 'Filter by order status (e.g., active, cancelled, completed)' },
-            limit: { type: 'number', description: 'Maximum number of orders to return (default: 20)' }
+            customer_id: { type: 'string' },
+            status: { type: 'string' },
+            limit: { type: 'number' }
           },
           required: ['customer_id']
         }
       },
       {
         name: 'update_order',
-        description: 'Use this tool to update the delivery address for an existing order after the customer asks to change where their order should be sent. This only updates the delivery address — no other parts of the order will be changed. Make sure the order ID is correct and the new address is complete before proceeding. you should not ask the order ID directly from the customer instead pass it from the data you got before',
+        description: 'Update delivery address for an existing order. Use order_id from prior data (do not ask customer).',
         inputSchema: {
           type: 'object',
           properties: {
             order_id: { type: 'string' },
             delivery_address: { type: 'string' },
-            status: {type: 'string'}
+            status: { type: 'string' }
           },
           required: ['order_id', 'delivery_address']
         }
       },
       {
         name: 'skip_next_payment',
-        description: 'Use this tool to skip the upcoming payment for an order. It automatically adjusts the schedule by shifting the next payment date forward based on the payment frequency (e.g., by one week for weekly plans). This is helpful when a customer requests to pause their payment without cancelling their order.',
+        description: 'Skip the next scheduled payment. Shifts the date forward based on payment frequency.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -177,7 +144,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_info_for_skipping_next_payment',
-        description: 'This tool provides two options for customers who wish to skip an upcoming payment. It is triggered only when a customer requests information about skipping a payment. Once the order is identified, the tool uses the associated payment schedule ID to retrieve the payment data. The user will be asked how many payments they want to skip (within the limits of the schedule’s end date and frequency). Based on this, the tool will return two options: (1) redistribute the skipped amount across the remaining payments, or (2) add the skipped amount to the next scheduled payment.',
+        description: 'Returns 2 options for skipping payments: (1) spread amount over future payments, (2) add to next payment.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -187,12 +154,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['payment_schedule_id', 'paymentsToSkip', 'totalOwed']
         }
-      }      
-      
-      // ...add more tools for your API as needed
+      }
     ]
   };
 });
+
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
